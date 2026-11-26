@@ -1,14 +1,19 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="ja">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>早押しクイズ</title>
-  <link rel="stylesheet" href="style.css">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>easy-hayaoshi-quiz</title>
+<link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <h1 class="title">⚡ <span>早押し</span>クイズ ⚡</h1>
-  <p class="subtitle">Buzzer Quiz</p>
-  <button class="btn">スタート</button>
+<header>
+  <h1>easy-hayaoshi-quiz</h1>
+  <div id="me-box"></div>
+</header>
+<main id="app"></main>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="questions.js"></script>
+<script src="app.js"></script>
 </body>
 </html>
