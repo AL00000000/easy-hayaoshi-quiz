@@ -34,3 +34,7 @@ th, td { border-bottom: 1px solid #ddd; padding: 6px; text-align: left; vertical
 .boo { background: #fff; color: #8e44ad; border-color: #8e44ad; }
 .boo.on { background: #8e44ad; color: #fff; }
 .rank { display: inline-block; min-width: 22px; text-align: center; border-radius: 4px; background: #f1c40f; color: #222; font-weight: bold; padding: 0 4px; }
+#game-card { position: relative; }
+#pause-overlay { position: absolute; inset: 0; background: rgba(244,241,234,.97); border-radius: 10px; display: flex; align-items: center; justify-content: center; text-align: center; z-index: 5; }
+#pause-btn { padding: 4px 12px; }
+.boo { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 38px; padding: 0; }

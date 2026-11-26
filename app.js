@@ -9,6 +9,67 @@ const LS = {
   get(k, d) { try { const v = localStorage.getItem(k); return v ? JSON.parse(v) : d; } catch { return d; } },
   set(k, v) { localStorage.setItem(k, JSON.stringify(v)); },
 };
+// ===================== 効果音（Web Audio で合成。音声ファイルは使わない） =====================
+const Sound = {
+  ctx: null,
+  unlock() { // ブラウザは操作があるまで音を出せないので、最初のクリック/キーで準備する
+    if (!this.ctx) { const A = window.AudioContext || window.webkitAudioContext; if (A) this.ctx = new A(); }
+    if (this.ctx && this.ctx.state === "suspended") this.ctx.resume();
+  },
+  tone(freq, start, dur, { type = "sine", vol = 0.25, attack = 0.005, filter = null } = {}) {
+    const ctx = this.ctx; if (!ctx) return;
+    const t = ctx.currentTime + start;
+    const o = ctx.createOscillator(), g = ctx.createGain();
+    o.type = type; o.frequency.setValueAtTime(freq, t);
+    g.gain.setValueAtTime(0.0001, t);
+    g.gain.exponentialRampToValueAtTime(vol, t + attack);
+    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    let node = o;
+    if (filter) { const f = ctx.createBiquadFilter(); f.type = "lowpass"; f.frequency.value = filter; o.connect(f); node = f; }
+    node.connect(g); g.connect(ctx.destination);
+    o.start(t); o.stop(t + dur + 0.05);
+  },
+  // 出題：「デデン」
+  start() {
+    for (const [f, st, d] of [[196, 0, 0.16], [131, 0.2, 0.7]]) {
+      this.tone(f, st, d, { type: "sawtooth", vol: 0.22, filter: 1400 });
+      this.tone(f / 2, st, d, { type: "square", vol: 0.12, filter: 600 });
+    }
+  },
+  // 早押し：「ピロリローン」
+  buzz() {
+    [1047, 1319, 1568, 2093].forEach((f, i) => this.tone(f, i * 0.055, 0.09, { type: "triangle", vol: 0.22 }));
+    this.tone(2093, 0.22, 0.45, { type: "triangle", vol: 0.2 });
+    this.tone(2637, 0.22, 0.45, { type: "sine", vol: 0.08 });
+  },
+  // 正解：「ピンポーン」
+  correct() {
+    this.tone(1319, 0, 0.35, { vol: 0.3 }); this.tone(2638, 0, 0.2, { vol: 0.06 });
+    this.tone(1047, 0.3, 0.9, { vol: 0.3 }); this.tone(2094, 0.3, 0.5, { vol: 0.06 });
+  },
+  // 不正解：「ブブー」
+  wrong() {
+    this.tone(140, 0, 0.14, { type: "square", vol: 0.18, attack: 0.01, filter: 900 });
+    this.tone(140, 0.2, 0.55, { type: "square", vol: 0.18, attack: 0.01, filter: 900 });
+  },
+};
+document.addEventListener("pointerdown", () => Sound.unlock(), true);
+document.addEventListener("keydown", () => Sound.unlock(), true);
+
+// 一時停止できるタイマー（registry ごとにまとめて止める・再開する）
+class PTimer {
+  constructor(reg, fn, ms) { this.reg = reg; this.fn = fn; this.left = ms; reg.add(this); if (!reg.paused) this.run(); }
+  run() { if (this.id || this.done) return; this.t0 = performance.now(); this.id = setTimeout(() => { this.id = null; this.done = true; this.reg.delete(this); this.fn(); }, Math.max(0, this.left)); }
+  hold() { if (!this.id) return; clearTimeout(this.id); this.id = null; this.left -= performance.now() - this.t0; }
+  cancel() { clearTimeout(this.id); this.id = null; this.done = true; this.reg.delete(this); }
+}
+function makeRegistry() {
+  const r = new Set(); r.paused = false;
+  r.pause = () => { r.paused = true; for (const t of r) t.hold(); };
+  r.resume = () => { r.paused = false; for (const t of [...r]) t.run(); };
+  return r;
+}
+const THUMB_DOWN = `<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true"><path fill="currentColor" d="M15 3H6c-.83 0-1.54.5-1.84 1.22l-3.02 7.05c-.09.23-.14.47-.14.73v2c0 1.1.9 2 2 2h6.31l-.95 4.57-.03.32c0 .41.17.79.44 1.06L9.83 23l6.59-6.59c.36-.36.58-.86.58-1.41V5c0-1.1-.9-2-2-2zm4 0v12h4V3h-4z"/></svg>`;
 const QMAP = Object.fromEntries(window.QUESTIONS.map((q) => [q.id, q]));
 
 // ===================== プロフィール・ランク =====================
@@ -136,6 +197,15 @@ class Host {
     this.conns = new Map(); // pid -> conn
     this.settings = defaultSettings();
     this.inGame = false;
+    this.timers = makeRegistry();
+    this.paused = false;
+  }
+  later(fn, ms) { return new PTimer(this.timers, fn, ms); }
+  setPaused(on, by) {
+    if (!this.inGame || this.paused === on) return;
+    this.paused = on;
+    if (on) this.timers.pause(); else this.timers.resume();
+    this.broadcast({ t: "pause", on, by: nameOfPlayer(this.players, by) });
   }
   open(onReady, onError) {
     if (!this.online) { onReady(null); return; }
@@ -169,6 +239,7 @@ class Host {
     if (m.t === "buzz") this.onBuzz(pid, Number(m.elapsed), m.charIdx);
     else if (m.t === "answer") this.onAnswer(pid, !!m.ok, String(m.text || "").slice(0, 40));
     else if (m.t === "boo") this.onBoo(pid, m.qid, !!m.on);
+    else if (m.t === "pause") this.setPaused(!!m.on, pid);
   }
   leave(pid) {
     this.conns.delete(pid);
@@ -184,6 +255,7 @@ class Host {
   start() {
     const s = this.settings;
     this.inGame = true;
+    this.paused = false; this.timers = makeRegistry();
     this.startPlayers = this.players.map((p) => ({ ...p }));
     const avg = this.players.reduce((a, p) => a + p.rating, 0) / this.players.length;
     this.roomRank = rankOf(avg);
@@ -192,7 +264,7 @@ class Host {
     this.log = [];
     this.qi = -1;
     this.broadcast({ t: "start", total: this.qlist.length, players: this.startPlayers, roomRank: this.roomRank, settings: s });
-    setTimeout(() => this.next(), 800);
+    this.later(() => this.next(), 800);
   }
   next() {
     this.qi++;
@@ -204,11 +276,11 @@ class Host {
     const delay = 1500;
     this.broadcast({ t: "q", i: this.qi, total: this.qlist.length, q, delay, slots });
     const dur = delay + [...q.text].length * this.settings.charMs + 5000;
-    this.cur.endTimer = setTimeout(() => this.onTimeUp(), dur);
+    this.cur.endTimer = this.later(() => this.onTimeUp(), dur);
   }
   onBuzz(pid, elapsed, charIdx) {
     const c = this.cur;
-    if (!c || c.closed || c.buzzes.some((b) => b.pid === pid)) return;
+    if (!c || c.closed || this.paused || c.buzzes.some((b) => b.pid === pid)) return;
     if (this.settings.mode === 1 && c.rights.length) { this.sendTo(pid, { t: "noright" }); return; }
     c.buzzes.push({ pid, elapsed, charIdx, done: false });
     if (!c.batch) c.batch = setTimeout(() => this.assign(), COLLECT_MS);
@@ -221,7 +293,7 @@ class Host {
       b.done = true;
       if (c.rights.length < c.slots) {
         c.rights.push(b.pid);
-        if (this.settings.mode === 1) clearTimeout(c.endTimer); // 方式1は解答が終わるまで待つ
+        if (this.settings.mode === 1) c.endTimer.cancel(); // 方式1は解答が終わるまで待つ
         this.broadcast({ t: "right", pid: b.pid, order: c.rights.length, charIdx: b.charIdx });
       } else this.sendTo(b.pid, { t: "noright" });
     }
@@ -245,14 +317,15 @@ class Host {
     const c = this.cur;
     if (c.closed) return;
     c.closed = true;
-    clearTimeout(c.endTimer); clearTimeout(c.batch);
+    c.endTimer.cancel(); clearTimeout(c.batch);
     for (const [pid, r] of Object.entries(c.results)) if (r.ok) this.scores[pid] = (this.scores[pid] || 0) + 1;
     this.log.push({ qid: c.q.id, results: c.results });
     this.broadcast({ t: "reveal", q: c.q, results: c.results, scores: this.scores });
-    setTimeout(() => this.next(), 4500);
+    this.later(() => this.next(), 4500);
   }
   finish() {
     this.inGame = false;
+    this.paused = false;
     const deltas = eloDeltas(this.startPlayers, this.scores);
     for (const p of this.players) p.rating += deltas[p.id] || 0;
     this.broadcast({ t: "end", scores: this.scores, deltas, log: this.log, players: this.startPlayers });
@@ -266,6 +339,7 @@ class Host {
   close() { if (this.peer) this.peer.destroy(); }
 }
 
+const nameOfPlayer = (players, pid) => (players.find((p) => p.id === pid) || {}).name || "？";
 function defaultSettings() {
   return Object.assign({ mode: 1, input: "choice", pct: 50, count: 10, tts: true, charMs: 120 }, LS.get("ehq.settings", {}));
 }
@@ -311,6 +385,8 @@ const client = {
   host: null, conn: null, isHost: false,
   players: [], settings: null, code: null, hostId: null,
   game: null,
+  timers: makeRegistry(),
+  paused: false,
   send(m) {
     if (this.isHost) this.host.handle(null, m);
     else if (this.conn) this.conn.send(m);
@@ -337,6 +413,7 @@ const handlers = {
   answered(m) { onAnswered(m); },
   reveal(m) { onReveal(m); },
   end(m) { onEnd(m); },
+  pause(m) { onPause(m); },
   boo(m) {
     const s = qs(m.qid);
     s.boo[m.cat] = Math.max(0, s.boo[m.cat] + (m.on ? 1 : -1));
@@ -398,7 +475,8 @@ function leaveRoom() {
   stopAll();
   if (client.host) client.host.close();
   if (client.peer) client.peer.destroy();
-  Object.assign(client, { host: null, conn: null, peer: null, isHost: false, game: null });
+  Object.assign(client, { host: null, conn: null, peer: null, isHost: false, game: null, paused: false });
+  drawPause();
   renderHome();
 }
 
@@ -457,13 +535,15 @@ function renderGame() {
     <div class="row" style="justify-content:space-between"><b id="qno"></b><span class="muted">部屋のランク <span class="rank">${g.roomRank}</span>・${g.settings.mode === 1 ? "方式1" : "方式2"}・${g.settings.input === "voice" ? "音声入力" : "ひらがな4択"}</span></div>
     <div id="scoreboard" class="players"></div>
   </div>
-  <div class="card">
+  <div class="card" id="game-card">
     <div id="qtext"></div>
     <div class="status" id="status"></div>
     <div id="answer-area"></div>
     <button id="buzz" disabled>押す！（スペース）</button>
   </div>`;
   $("#buzz").onclick = buzz;
+  client.paused = false; client.timers = makeRegistry();
+  drawPause();
   drawScoreboard();
 }
 function drawScoreboard() {
@@ -477,7 +557,8 @@ const nameOf = (pid) => { const p = (client.game?.players || client.players).fin
 function onQuestion(m) {
   const g = client.game;
   stopAll();
-  g.cur = { q: m.q, chars: [...m.q.text], shown: 0, t0: null, myState: "wait", token: rid(), slots: m.slots };
+  g.cur = { q: m.q, chars: [...m.q.text], shown: 0, t0: null, pausedMs: 0, myState: "wait", token: rid(), slots: m.slots };
+  Sound.start();
   g.qs.push(m.q);
   $("#qno").textContent = `第${m.i + 1}問 / ${m.total}`;
   $("#answer-area").innerHTML = "";
@@ -485,7 +566,7 @@ function onQuestion(m) {
   setStatus("まもなく出題…");
   updateBuzz();
   const tok = g.cur.token;
-  g.cur.delayTimer = setTimeout(() => {
+  g.cur.delayTimer = new PTimer(client.timers, () => {
     if (!g.cur || g.cur.token !== tok) return;
     g.cur.t0 = performance.now();
     g.cur.myState = "listen";
@@ -500,13 +581,13 @@ function streamTick(tok) {
   if (!c || c.token !== tok || c.paused) return;
   c.shown++;
   drawText();
-  if (c.shown < c.chars.length) c.streamTimer = setTimeout(() => streamTick(tok), client.game.settings.charMs);
+  if (c.shown < c.chars.length) c.streamTimer = new PTimer(client.timers, () => streamTick(tok), client.game.settings.charMs);
 }
 function pauseStream() {
   const c = client.game?.cur;
   if (!c) return;
   c.paused = true;
-  clearTimeout(c.streamTimer);
+  c.streamTimer?.cancel();
   stopSpeak();
 }
 function drawText(all) {
@@ -522,16 +603,19 @@ function updateBuzz() {
 }
 function buzz() {
   const c = client.game?.cur;
-  if (!c || c.myState !== "listen" || c.t0 == null) return;
+  if (!c || c.myState !== "listen" || c.t0 == null || client.paused) return;
   c.myState = "buzzed";
+  c.buzzSoundPlayed = true;
+  Sound.buzz();
   pauseStream();
   updateBuzz();
   setStatus("押しました！");
-  client.send({ t: "buzz", elapsed: performance.now() - c.t0, charIdx: c.shown });
+  client.send({ t: "buzz", elapsed: performance.now() - c.t0 - c.pausedMs, charIdx: c.shown });
 }
 function onRight(m) {
   const g = client.game, c = g.cur;
   if (!c) return;
+  if (m.pid !== profile.id || !c.buzzSoundPlayed) Sound.buzz();
   if (m.pid === profile.id) {
     c.myState = "answering";
     updateBuzz();
@@ -550,6 +634,7 @@ function onRight(m) {
 }
 function onAnswered(m) {
   if (m.pid === profile.id) return;
+  if (m.ok) Sound.correct(); else Sound.wrong();
   const g = client.game;
   if (g.settings.mode === 1) setStatus(`${esc(nameOf(m.pid))}：<span class="${m.ok ? "result-ok" : "result-ng"}">${m.ok ? "正解" : "不正解"}</span>`);
 }
@@ -559,6 +644,7 @@ function submitAnswer(ok, text) {
   c.myState = "done";
   stopAnswerUI();
   client.game.myResults[c.q.id] = ok;
+  if (ok) Sound.correct(); else Sound.wrong();
   setStatus(ok ? `<span class="result-ok">正解！</span>` : `<span class="result-ng">不正解…</span>`);
   $("#answer-area").innerHTML = "";
   client.send({ t: "answer", ok, text });
@@ -585,7 +671,7 @@ function drawChoices() {
 }
 function pickChoice(i) {
   const c = client.game.cur;
-  if (c.myState !== "answering" || !c.choices) return;
+  if (c.myState !== "answering" || !c.choices || client.paused) return;
   const r = [...c.q.reading];
   const pick = c.choices[i];
   c.typed.push(pick);
@@ -607,7 +693,7 @@ function startVoiceAnswer() {
   const inp = $("#voice-input");
   inp.focus();
   const submit = () => submitAnswer(judgeText(c.q, inp.value), inp.value);
-  inp.onkeydown = (e) => { if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); submit(); } };
+  inp.onkeydown = (e) => { if (client.paused) { e.preventDefault(); return; } if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); submit(); } };
   $("#voice-ok").onclick = submit;
   if (SR) { $("#voice-retry").onclick = () => { inp.value = ""; startRecognition(inp); }; startRecognition(inp); }
   startTimer(VOICE_MS, submit);
@@ -632,13 +718,54 @@ function startRecognition(inp) {
   try { rec.start(); } catch {}
 }
 
+// ----- 一時停止（部屋の全員が止まる。誰でも押せる） -----
+function togglePause() {
+  if (!client.game || client.game.over) return;
+  client.send({ t: "pause", on: !client.paused });
+}
+function onPause(m) {
+  const c = client.game?.cur;
+  client.paused = m.on;
+  if (m.on) {
+    client.timers.pause();
+    if ("speechSynthesis" in window) speechSynthesis.pause();
+    if (c) { c.pauseStart = performance.now(); try { c.rec && c.rec.abort(); } catch {} }
+  } else {
+    client.timers.resume();
+    if ("speechSynthesis" in window) speechSynthesis.resume();
+    if (c && c.pauseStart != null) { if (c.t0 != null) c.pausedMs += performance.now() - c.pauseStart; c.pauseStart = null; }
+    const inp = $("#voice-input");
+    if (c && c.myState === "answering" && inp && SR) startRecognition(inp);
+  }
+  drawPause(m.by);
+}
+function drawPause(by) {
+  const b = $("#pause-btn");
+  if (b) {
+    b.textContent = client.paused ? "▶ 再開" : "⏸ 一時停止";
+    b.style.display = client.game && !client.game.over ? "" : "none";
+    b.onclick = togglePause;
+  }
+  const card = $("#game-card");
+  if (!card) return;
+  let ov = $("#pause-overlay");
+  if (client.paused) {
+    if (!ov) { ov = document.createElement("div"); ov.id = "pause-overlay"; card.appendChild(ov); }
+    ov.innerHTML = `<div><div style="font-size:28px">一時停止中</div><div class="muted">${esc(by || "")} さんが止めました</div><button id="resume-btn" style="margin-top:12px">▶ 再開</button></div>`;
+    $("#resume-btn").onclick = togglePause;
+  } else if (ov) ov.remove();
+}
+
 // ----- タイマー -----
 function startTimer(ms, onEnd) {
   const c = client.game.cur;
   clearInterval(c.timer);
-  const t0 = performance.now();
+  let used = 0, last = performance.now();
   c.timer = setInterval(() => {
-    const left = 1 - (performance.now() - t0) / ms;
+    const now = performance.now();
+    if (!client.paused) used += now - last; // 一時停止中は制限時間を進めない
+    last = now;
+    const left = 1 - used / ms;
     const bar = $("#tbar");
     if (bar) bar.style.width = Math.max(0, left * 100) + "%";
     if (left <= 0) { clearInterval(c.timer); onEnd(); }
@@ -653,7 +780,7 @@ function stopAnswerUI() {
 }
 function stopAll() {
   const c = client.game?.cur;
-  if (c) { clearTimeout(c.delayTimer); clearTimeout(c.streamTimer); c.paused = true; stopAnswerUI(); c.token = null; }
+  if (c) { c.delayTimer?.cancel(); c.streamTimer?.cancel(); c.paused = true; stopAnswerUI(); c.token = null; }
   stopSpeak();
 }
 
@@ -680,6 +807,8 @@ function onEnd(m) {
   stopAll();
   const g = client.game;
   g.over = true;
+  client.paused = false;
+  drawPause();
   g.myBoos = new Set();
   g.endLog = m.log;
   const solo = m.players.length < 2;
@@ -694,9 +823,9 @@ function onEnd(m) {
     </table>
   </div>
   <div class="card">
-    <h2>悪いと思った問題にブーイング</h2>
-    <p class="muted">理由は聞きません。押した人がその問題に正解していたかどうかを分けて記録します。</p>
-    <table>${m.log.map((l) => { const q = QMAP[l.qid] || g.qs.find((x) => x.id === l.qid); const r = l.results[profile.id]; return `<tr><td>${esc(q.text)}<br><b>${esc(q.answer)}</b> <span class="muted">あなた：${!r ? "答えず" : r.ok ? "○" : "×"}</span></td><td><button class="boo" data-q="${esc(l.qid)}">ブーイング</button></td></tr>`; }).join("")}</table>
+    <h2>出た問題</h2>
+    <p class="muted">悪い問題だと思ったら ${THUMB_DOWN.replace('width="22" height="22"', 'width="14" height="14"')} を押してください（もう一度押すと取り消し）。</p>
+    <table>${m.log.map((l) => { const q = QMAP[l.qid] || g.qs.find((x) => x.id === l.qid); const r = l.results[profile.id]; return `<tr><td>${esc(q.text)}<br><b>${esc(q.answer)}</b> <span class="muted">あなた：${!r ? "答えず" : r.ok ? "○" : "×"}</span></td><td><button class="boo" data-q="${esc(l.qid)}" title="ブーイング" aria-label="ブーイング" aria-pressed="false">${THUMB_DOWN}</button></td></tr>`; }).join("")}</table>
   </div>
   <div class="row">${client.isHost ? `<button id="again">部屋に戻る</button>` : `<span class="muted">部屋を立てた人が戻るのを待っています</span>`}<button class="sub" id="leave">部屋を出る</button></div>`;
   for (const b of document.querySelectorAll(".boo")) b.onclick = () => client.send({ t: "boo", qid: b.dataset.q, on: !g.myBoos.has(b.dataset.q) });
@@ -705,7 +834,7 @@ function onEnd(m) {
 }
 function drawBooButtons() {
   const g = client.game;
-  for (const b of document.querySelectorAll(".boo")) { const on = g.myBoos.has(b.dataset.q); b.classList.toggle("on", on); b.textContent = on ? "ブーイング済み" : "ブーイング"; }
+  for (const b of document.querySelectorAll(".boo")) { const on = g.myBoos.has(b.dataset.q); b.classList.toggle("on", on); b.setAttribute("aria-pressed", on); }
 }
 
 // ---------- 画面: 統計 ----------
@@ -735,6 +864,8 @@ document.addEventListener("keydown", (e) => {
   const c = client.game?.cur;
   if (!c) return;
   const inInput = document.activeElement && /INPUT|SELECT|TEXTAREA/.test(document.activeElement.tagName);
+  if (e.key === "Escape" || (e.key.toLowerCase() === "p" && !inInput)) { if (!client.game.over) { e.preventDefault(); togglePause(); } return; }
+  if (client.paused) return;
   if (e.code === "Space" && !inInput) { e.preventDefault(); buzz(); return; }
   if (c.myState === "answering" && c.choices && /^[1-4]$/.test(e.key)) { e.preventDefault(); pickChoice(Number(e.key) - 1); }
 });
