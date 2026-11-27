@@ -260,6 +260,7 @@ function judgeText(q, text) {
 // 「もう一回」：正解ではないが惜しい答え（1問につき1回だけ答え直せる）
 // 1) 問題ごとに登録した答え（q.retry）。ほかの問題の答えでもよい（ソフトバンクグループ←ソフトバンク）
 // 2) 入力に答え・読み・別解（2文字以上）がまるごと含まれる場合（みずほ←みずほ銀行）。ほかの問題の答えそのものは除く
+// 3) 入力が問題文の中に出てくる言葉（2文字以上）の場合（東洋経済新報社←会社四季報、刀←森岡毅）。まだ読まれていない部分でもよい（本人の判断）
 function isRetry(q, text) {
   const raw = loose(text);
   if (!raw) return false;
@@ -267,7 +268,9 @@ function isRetry(q, text) {
   const manual = (q.retry || []).map(loose);
   if (inputs.some((i) => manual.includes(i))) return true;
   const forms = [q.answer, q.reading, ...(q.accept || [])].map(loose).filter((f) => f.length >= 2);
-  return inputs.some((i) => !KNOWN_ANSWERS.has(i) && forms.some((f) => i.length > f.length && i.includes(f)));
+  if (inputs.some((i) => !KNOWN_ANSWERS.has(i) && forms.some((f) => i.length > f.length && i.includes(f)))) return true;
+  const qt = [q.text, ...(q.variants || []).map((v) => v.text)].map(loose).join("／");
+  return inputs.some((i) => i.length >= 2 && qt.includes(i));
 }
 const KANA_ROWS = ["あいうえお", "かきくけこ", "さしすせそ", "たちつてと", "なにぬねの", "はひふへほ", "まみむめも", "やゆよ", "らりるれろ", "わをん", "がぎぐげご", "ざじずぜぞ", "だぢづでど", "ばびぶべぼ", "ぱぴぷぺぽ"];
 const SMALL_PAIRS = { "ぁ": "あ", "ぃ": "い", "ぅ": "う", "ぇ": "え", "ぉ": "お", "ゃ": "や", "ゅ": "ゆ", "ょ": "よ", "っ": "つ" };
