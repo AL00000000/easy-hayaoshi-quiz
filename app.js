@@ -869,6 +869,58 @@ document.getElementById("logo").addEventListener("click", (e) => {
   leaveRoom();
 });
 
+// 左上のQRボタン: この版のURLをQRコードで表示（スマホで読み取って開ける）
+// QRの生成ライブラリは押されたときだけ読み込む（一度読めば sw.js が保存するのでオフラインでも出せる）
+const QR_LIB = "https://unpkg.com/qrcode-generator@1.4.4/qrcode.js";
+let qrLibLoading = null;
+const loadQrLib = () => (qrLibLoading ||= new Promise((ok, ng) => {
+  if (window.qrcode) return ok();
+  const s = document.createElement("script");
+  s.src = QR_LIB; s.onload = ok; s.onerror = () => { qrLibLoading = null; ng(new Error("QR")); };
+  document.head.appendChild(s);
+}));
+function closeQr() { const ov = $("#qr-overlay"); if (ov) ov.remove(); }
+async function showQr() {
+  if ($("#qr-overlay")) return closeQr();
+  const url = EDITION_URL[EDITION];
+  const ov = document.createElement("div");
+  ov.id = "qr-overlay";
+  ov.innerHTML = `<div class="qr-box" role="dialog" aria-label="このページのQRコード">
+    <button class="sub qr-close" title="閉じる（Esc）">✕</button>
+    <h2>スマホで読み取って開く</h2>
+    <div id="qr-img">QRコードを作っています…</div>
+    <p class="qr-url">${esc(url)}</p>
+    <div class="row" style="justify-content:center"><button id="qr-copy" class="sub">URLをコピー</button></div>
+  </div>`;
+  document.body.appendChild(ov);
+  ov.onclick = (e) => { if (e.target === ov) closeQr(); };
+  ov.querySelector(".qr-close").onclick = closeQr;
+  $("#qr-copy").onclick = async () => {
+    try { await navigator.clipboard.writeText(url); $("#qr-copy").textContent = "コピーしました"; } catch { $("#qr-copy").textContent = "コピーできませんでした"; }
+  };
+  try {
+    await loadQrLib();
+    const qr = qrcode(0, "M");
+    qr.addData(url);
+    qr.make();
+    const box = $("#qr-img");
+    if (box) box.innerHTML = qr.createSvgTag({ cellSize: 6, margin: 3, scalable: true });
+  } catch {
+    const box = $("#qr-img");
+    if (box) box.textContent = "QRコードを作れませんでした（ネットにつながっているか確認してください）";
+  }
+}
+{
+  const btn = document.createElement("button");
+  btn.id = "qr-btn"; btn.type = "button"; btn.title = "このページのQRコードを表示"; btn.textContent = "QR";
+  btn.onclick = showQr;
+  const h1 = document.querySelector("header h1");
+  const wrap = document.createElement("div");
+  wrap.className = "head-left";
+  h1.before(wrap); wrap.append(btn, h1);
+  document.addEventListener("keydown", (e) => { if (e.key === "Escape" && $("#qr-overlay")) { e.stopImmediatePropagation(); closeQr(); } }, true);
+}
+
 // ---------- 画面: 部屋（設定） ----------
 function renderLobby() {
   stopAll();
