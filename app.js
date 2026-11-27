@@ -649,8 +649,7 @@ const handlers = {
 // 記録は Google フォーム「簡単早押しクイズ 今日の10問の記録」に送り、回答シート（リンクを知っている人は閲覧可）から
 // gviz の CSV で読む。サーバーを持たずに「ほかの人の記録」を共有するための仕組み。
 const DAILY_COUNT = 10;
-const DAILY_FORM = "https://docs.google.com/forms/d/e/1FAIpQLSfR60v7eP7eKWKhj-7JUWHJBkd4VQPz3IVkmRwvUAEFGMJQ5w/formResponse";
-const DAILY_FIELDS = { date: "entry.1524584379", name: "entry.1927649045", rec: "entry.732693691", score: "entry.455250847" };
+// 2026-11-27〜28 の記録は Googleフォーム→スプレッドシートにあった（読み取りだけ残す）
 const DAILY_SHEET = "https://docs.google.com/spreadsheets/d/1v7S6vgtqQ9nWrvLPNtPEdW0XrfrU5N4ejDxgeVhGwSs/gviz/tq";
 const SITE_URL = "https://al00000000.github.io/easy-hayaoshi-quiz/";
 // 版：全体版（/）とポケモン版（/pokemon/）は URL を分ける。ポケモン版は pokemon/index.html で EHQ_EDITION を設定する
@@ -714,13 +713,31 @@ function parseCSV(text) {
   if (cur || row.length) { row.push(cur); rows.push(row); }
   return rows;
 }
-async function loadGhosts(key, qids, mode = "all") {
-  const tq = encodeURIComponent(`select C,D,E where B='${dailyTag(key, mode)}' order by A desc limit 300`);
-  const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 4000);
+// ゴーストの記録は Firebase（Cloud Firestore の daily/{タグ}/records/{uid}）から読む（2026-11-28 から）。
+// 移行前の記録（Googleフォーム→スプレッドシート）も、当日分は一緒に読む（移行日の記録を消さないため。11/29以降は空になるだけ）。
+async function fetchDailyRecords(tag) {
+  const out = [];
   try {
-    const text = await fetch(`${DAILY_SHEET}?tqx=out:csv&tq=${tq}`, { signal: ctl.signal }).then((r) => r.text());
+    const c = await cloudInit();
+    const f = c.fs;
+    const snap = await f.getDocs(f.query(f.collection(c.db, "daily", tag, "records"), f.orderBy("created", "desc"), f.limit(300)));
+    for (const d of snap.docs) out.push([d.data().name, d.data().rec]);
+  } catch (e) { console.warn("ghosts(firebase)", e); }
+  if (tag.slice(1) <= "20261128") {
+    try {
+      const tq = encodeURIComponent(`select C,D,E where B='${tag}' order by A desc limit 300`);
+      const text = await fetch(`${DAILY_SHEET}?tqx=out:csv&tq=${tq}`).then((r) => r.text());
+      for (const [name, rec] of parseCSV(text).slice(1)) out.push([name, rec]);
+    } catch {}
+  }
+  return out;
+}
+async function loadGhosts(key, qids, mode = "all") {
+  let timer;
+  try {
+    const rows = await Promise.race([fetchDailyRecords(dailyTag(key, mode)), new Promise((ok) => { timer = setTimeout(() => ok([]), 5000); })]);
     const seen = new Set([profile.id]), list = [];
-    for (const [name, recText] of parseCSV(text).slice(1)) {
+    for (const [name, recText] of rows) {
       let rec; try { rec = JSON.parse(recText); } catch { continue; }
       if (!rec || !Array.isArray(rec.q) || !Array.isArray(rec.r) || seen.has(rec.u)) continue;
       seen.add(rec.u);
@@ -785,12 +802,9 @@ function finishDaily(m) {
     daily.streak = daily.last === todayKey(-1) ? daily.streak + 1 : daily.last === key ? daily.streak : 1;
     daily.last = key; daily.best = Math.max(daily.best || 0, score);
     saveDaily(mode);
-    const body = new URLSearchParams();
-    body.append(DAILY_FIELDS.date, dailyTag(key, mode));
-    body.append(DAILY_FIELDS.name, profile.name);
-    body.append(DAILY_FIELDS.rec, JSON.stringify({ v: 1, u: profile.id, q: d.qids, r: daily.days[key].r }));
-    body.append(DAILY_FIELDS.score, String(score));
-    fetch(DAILY_FORM, { method: "POST", mode: "no-cors", body }).catch(() => {});
+    // 最初の1回だけ、ゴースト用に記録を Firebase へ送る（同じ日に2回は書けないルール）
+    const rec = JSON.stringify({ v: 1, u: profile.id, q: d.qids, r: daily.days[key].r });
+    cloudInit().then((c) => c.fs.setDoc(c.fs.doc(c.db, "daily", dailyTag(key, mode), "records", c.uid), { name: String(profile.name).slice(0, 16), rec, score, created: c.fs.serverTimestamp() })).catch((e) => console.warn("daily(firebase)", e));
     d.official = false; // 2回目以降は練習扱い
   }
   return { recs, score };
