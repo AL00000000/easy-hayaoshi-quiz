@@ -243,6 +243,9 @@ function judgeText(q, text) {
   // 完全一致（分類語を外した形どうしも含む）
   const exact = (i) => pairs.some(([f, r, safe]) => (i === f || i === r) && (safe || !KNOWN_ANSWERS.has(i)));
   if (inputs.some(exact)) return true;
+  // 数字の答えは単位を省いてもよい（2025年←2025、1800万円←1800万・1800）。単位は数字の後ろの1〜2文字だけ
+  const unitOk = (i) => /\d$/.test(i) || /\d[万億兆]$/.test(i) ? pairs.some(([f]) => f.length > i.length && f.startsWith(i) && /^[^\d]{1,2}$/.test(f.slice(i.length))) : false;
+  if (inputs.some(unitOk)) return true;
   // ここから下の甘い判定は、入力がほかの問題の答えそのものなら使わない（岡山県→和歌山県 などを防ぐ）
   const free = inputs.filter((i) => !KNOWN_ANSWERS.has(i));
   // 漢字とかなの混ぜ書き
@@ -1174,10 +1177,12 @@ function startVoiceAnswer() {
   if (SR) { $("#voice-retry").onclick = () => { inp.value = ""; startRecognition(inp); }; startRecognition(inp); }
   startTimer(VOICE_MS, () => submit(true));
 }
-function startRecognition(inp) {
+function startRecognition(inp, keep) {
   const c = client.game.cur;
   try { c.rec && c.rec.abort(); } catch {}
   const rec = new SR();
+  // 聞き直すときは、それまでに聞き取った文字を残して後ろに足す
+  const base = keep ? inp.value : "";
   rec.lang = "ja-JP"; rec.interimResults = true; rec.continuous = false; rec.maxAlternatives = 5;
   rec.onresult = (e) => {
     let t = "";
@@ -1187,9 +1192,17 @@ function startRecognition(inp) {
       if (r.isFinal) for (const alt of r) if (judgeText(c.q, alt.transcript)) { best = alt.transcript; break; }
       t += best;
     }
-    inp.value = t.replace(/[。、]/g, "");
+    inp.value = base + t.replace(/[。、]/g, "");
   };
-  rec.onerror = (e) => { if (e.error === "not-allowed") setStatus("マイクが許可されていません。答えを入力して Enter で解答してください。"); };
+  rec.onerror = (e) => {
+    if (e.error === "not-allowed" || e.error === "service-not-allowed") { rec.denied = true; setStatus("マイクが許可されていません。答えを入力して Enter で解答してください。"); }
+    else if (e.error === "audio-capture" || e.error === "network") rec.denied = true; // 聞き直しても直らないので繰り返さない
+  };
+  // 考えて黙っていると、ブラウザが数秒で聞き取りを打ち切る（その後に話しても拾わない）。解答中ならすぐ聞き直す
+  rec.onend = () => {
+    if (rec.denied || c.rec !== rec || c.myState !== "answering" || client.paused || client.game?.cur !== c) return;
+    setTimeout(() => { if (c.rec === rec && c.myState === "answering" && !client.paused) startRecognition(inp, true); }, 150);
+  };
   c.rec = rec;
   try { rec.start(); } catch {}
 }
@@ -1211,7 +1224,7 @@ function onPause(m) {
     if ("speechSynthesis" in window) speechSynthesis.resume();
     if (c && c.pauseStart != null) { if (c.t0 != null) c.pausedMs += performance.now() - c.pauseStart; c.pauseStart = null; }
     const inp = $("#voice-input");
-    if (c && c.myState === "answering" && inp && SR) startRecognition(inp);
+    if (c && c.myState === "answering" && inp && SR) startRecognition(inp, true);
   }
   drawPause(m.by);
 }
