@@ -499,8 +499,8 @@ function renderHome() {
 // ---------- 画面: 問題の投稿 ----------
 // 投稿は Google フォームに送る（回答はフォーム所有者のスプレッドシートにだけ入り、外からは見えない）。
 // 送られた問題は Claude が文法だけ整えて data/07_user.txt に足す（手動。ジャンル「投稿」を付ける）。
-const SUBMIT_URL = "https://docs.google.com/forms/d/e/1FAIpQLSdaaCSXEzdVCobSoOu1kCelSglE75YAxTd-DtlPB92EELbG2g/formResponse";
-const SUBMIT_FIELDS = { text: "entry.1138395124", answer: "entry.1171775600", reading: "entry.688137783", accept: "entry.1489947042", genre: "entry.893360912", name: "entry.655950683" };
+const SUBMIT_URL = "https://docs.google.com/forms/d/e/1FAIpQLSexB_m447RgeWP5t8gJQqU6bRbGO9hgQ1y_ywN8swWUWByBZg/formResponse";
+const SUBMIT_FIELDS = { text: "entry.1221034603", answer: "entry.588971532", reading: "entry.885368661", accept: "entry.1858969264", genre: "entry.1758969097", name: "entry.818392278" };
 function renderSubmit() {
   stopAll();
   app.innerHTML = `
