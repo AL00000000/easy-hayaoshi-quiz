@@ -59,3 +59,10 @@ select, input, textarea { max-width: 100%; box-sizing: border-box; }
   main { padding: 10px; }
   .card { padding: 14px 12px; }
 }
+/* 今日の10問・ゴースト・シェア */
+.daily-card { border-left: 6px solid #c0392b; }
+.ghostbar .ghost { background: #eee; color: #555; }
+.ghostbar .ghost.pressed { background: #f39c12; color: #fff; }
+.ghostbar .ghost.ok { background: #d5f0dc; color: #1e8449; }
+.share-text { white-space: pre-wrap; background: #f6f6f6; border-radius: 8px; padding: 10px; font-size: 14px; }
+a.btn { display: inline-block; padding: 8px 16px; border-radius: 6px; background: #263a5c; color: #fff; text-decoration: none; }

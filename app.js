@@ -377,7 +377,7 @@ class Host {
     this.startPlayers = this.players.map((p) => ({ ...p }));
     const avg = this.players.reduce((a, p) => a + p.rating, 0) / this.players.length;
     this.roomRank = rankOf(avg);
-    this.qlist = pickQuestions(s.count, this.roomRank);
+    this.qlist = this.daily ? dailyQuestions(this.daily) : pickQuestions(s.count, this.roomRank);
     this.scores = Object.fromEntries(this.players.map((p) => [p.id, 0]));
     this.log = [];
     this.gameId = rid();
@@ -527,7 +527,7 @@ const client = {
 const handlers = {
   lobby(m) {
     Object.assign(client, { players: m.players, settings: m.settings, code: m.code, hostId: m.hostId });
-    if (!client.game || client.game.over) renderLobby();
+    if ((!client.game || client.game.over) && !client.daily) renderLobby();
   },
   reject(m) { alert(m.reason); leaveRoom(); },
   players(m) { client.players = m.players; drawScoreboard(); },
@@ -560,10 +560,175 @@ const handlers = {
   },
 };
 
+// ===================== 今日の10問（全員共通の出題・ゴースト対戦・シェア） =====================
+// 記録は Google フォーム「簡単早押しクイズ 今日の10問の記録」に送り、回答シート（リンクを知っている人は閲覧可）から
+// gviz の CSV で読む。サーバーを持たずに「ほかの人の記録」を共有するための仕組み。
+const DAILY_COUNT = 10;
+const DAILY_FORM = "https://docs.google.com/forms/d/e/1FAIpQLSfR60v7eP7eKWKhj-7JUWHJBkd4VQPz3IVkmRwvUAEFGMJQ5w/formResponse";
+const DAILY_FIELDS = { date: "entry.1524584379", name: "entry.1927649045", rec: "entry.732693691", score: "entry.455250847" };
+const DAILY_SHEET = "https://docs.google.com/spreadsheets/d/1v7S6vgtqQ9nWrvLPNtPEdW0XrfrU5N4ejDxgeVhGwSs/gviz/tq";
+const SITE_URL = "https://al00000000.github.io/easy-hayaoshi-quiz/";
+// 日本時間の日付（YYYY-MM-DD）
+const todayKey = (offsetDays = 0) => new Date(Date.now() + 9 * 3600e3 + offsetDays * 86400e3).toISOString().slice(0, 10);
+// シートで日付に自動変換されないよう、記録には「d20261127」の形で書く
+const dailyTag = (key) => "d" + key.replace(/-/g, "");
+function hash32(str) { let h = 0x811c9dc5; for (const ch of str) { h ^= ch.codePointAt(0); h = Math.imul(h, 16777619) >>> 0; } return h; }
+// 日付と問題IDのハッシュが小さい順に10問。全員が同じ10問になる（問題が増えても大半は変わらない）
+function dailyQuestions(key) {
+  return window.QUESTIONS.map((q) => ({ q, h: hash32(key + "|" + q.id) })).sort((a, b) => a.h - b.h).slice(0, DAILY_COUNT).map((x) => x.q);
+}
+let daily = LS.get("ehq.daily", { streak: 0, best: 0, last: null, days: {} });
+const saveDaily = () => LS.set("ehq.daily", daily);
+const dailyDone = (key = todayKey()) => !!daily.days[key];
+// 連続日数（最後に挑戦した日が昨日より前なら途切れている）
+const currentStreak = () => (daily.last === todayKey() || daily.last === todayKey(-1) ? daily.streak : 0);
+
+// ----- ゴースト（その日にほかの人が残した記録） -----
+function parseCSV(text) {
+  const rows = []; let row = [], cur = "", q = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (q) { if (c === '"') { if (text[i + 1] === '"') { cur += '"'; i++; } else q = false; } else cur += c; }
+    else if (c === '"') q = true;
+    else if (c === ",") { row.push(cur); cur = ""; }
+    else if (c === "\n") { row.push(cur); rows.push(row); row = []; cur = ""; }
+    else if (c !== "\r") cur += c;
+  }
+  if (cur || row.length) { row.push(cur); rows.push(row); }
+  return rows;
+}
+async function loadGhosts(key, qids) {
+  const tq = encodeURIComponent(`select C,D,E where B='${dailyTag(key)}' order by A desc limit 300`);
+  const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 4000);
+  try {
+    const text = await fetch(`${DAILY_SHEET}?tqx=out:csv&tq=${tq}`, { signal: ctl.signal }).then((r) => r.text());
+    const seen = new Set([profile.id]), list = [];
+    for (const [name, recText] of parseCSV(text).slice(1)) {
+      let rec; try { rec = JSON.parse(recText); } catch { continue; }
+      if (!rec || !Array.isArray(rec.q) || !Array.isArray(rec.r) || seen.has(rec.u)) continue;
+      seen.add(rec.u);
+      const map = {};
+      rec.q.forEach((id, i) => { const r = rec.r[i] || []; map[id] = { p: typeof r[0] === "number" && r[0] >= 0 ? r[0] / 100 : null, ok: !!r[1] }; });
+      if (!qids.some((id) => map[id])) continue;
+      list.push({ name: String(name).slice(0, 16) || "名無し", map, score: qids.filter((id) => map[id]?.ok).length });
+    }
+    // いちばん成績の良い人＋ランダムに2人
+    list.sort((a, b) => b.score - a.score);
+    const out = list.length ? [list[0]] : [];
+    const rest = shuffle(list.slice(1));
+    while (out.length < 3 && rest.length) out.push(rest.pop());
+    return out;
+  } catch { return []; } finally { clearTimeout(timer); }
+}
+// ゴーストとの勝敗：正解した人のうち、早く押した方の勝ち
+function ghostDuel(me, gh) {
+  const mo = me?.ok, go = gh?.ok;
+  if (mo && go) { const a = me.p ?? 1, b = gh.p ?? 1; return a < b ? 1 : a > b ? -1 : 0; }
+  return mo ? 1 : go ? -1 : 0;
+}
+
+async function startDaily() {
+  const key = todayKey(), qs = dailyQuestions(key);
+  app.innerHTML = `<div class="card">今日の10問を準備しています…</div>`;
+  const ghosts = await loadGhosts(key, qs.map((q) => q.id));
+  client.daily = { key, official: !dailyDone(key), ghosts, qids: qs.map((q) => q.id) };
+  createRoom(false);
+}
+// 1問ごとのゴースト表示（押した瞬間にチップを出し、正解発表で結果を出す）
+function drawGhosts(reveal) {
+  const el = $("#ghostbar"), g = client.game, c = g?.cur;
+  if (!el || !client.daily || !c) return;
+  const gs = client.daily.ghosts;
+  if (!gs.length) { el.innerHTML = `<span class="muted">👻 今日のゴーストはまだいません（あなたが一番乗り）</span>`; return; }
+  el.innerHTML = gs.map((gh, i) => {
+    const r = gh.map[c.q.id];
+    let st = "まだ";
+    if (reveal) st = !r ? "記録なし" : r.p == null ? "押さず" : `${r.ok ? "○" : "×"} ${Math.round(r.p * 100)}%`;
+    else if (c.ghostPressed?.has(i)) st = "押した！";
+    return `<span class="ghost ${reveal && r?.ok ? "ok" : ""} ${!reveal && c.ghostPressed?.has(i) ? "pressed" : ""}">👻${esc(gh.name)}：${st}</span>`;
+  }).join("");
+}
+function checkGhosts() {
+  const c = client.game?.cur;
+  if (!client.daily || !c) return;
+  c.ghostPressed ||= new Set();
+  const frac = c.shown / c.chars.length;
+  let changed = false;
+  client.daily.ghosts.forEach((gh, i) => { const r = gh.map[c.q.id]; if (r && r.p != null && frac >= r.p && !c.ghostPressed.has(i)) { c.ghostPressed.add(i); changed = true; } });
+  if (changed) { Sound.tone(880, 0, 0.08, { type: "triangle", vol: 0.08 }); drawGhosts(false); }
+}
+
+// ----- 終了時：記録・連続日数・送信・シェア -----
+function finishDaily(m) {
+  const d = client.daily, key = d.key;
+  const recs = d.qids.map((id) => { const l = m.log.find((x) => x.qid === id), r = l?.results[profile.id]; return { p: r && typeof r.pos === "number" ? r.pos : null, ok: !!r?.ok }; });
+  const score = recs.filter((r) => r.ok).length;
+  if (d.official) {
+    daily.days[key] = { score, r: recs.map((r) => [r.p == null ? -1 : Math.round(r.p * 100), r.ok ? 1 : 0]) };
+    daily.streak = daily.last === todayKey(-1) ? daily.streak + 1 : daily.last === key ? daily.streak : 1;
+    daily.last = key; daily.best = Math.max(daily.best || 0, score);
+    saveDaily();
+    const body = new URLSearchParams();
+    body.append(DAILY_FIELDS.date, dailyTag(key));
+    body.append(DAILY_FIELDS.name, profile.name);
+    body.append(DAILY_FIELDS.rec, JSON.stringify({ v: 1, u: profile.id, q: d.qids, r: daily.days[key].r }));
+    body.append(DAILY_FIELDS.score, String(score));
+    fetch(DAILY_FORM, { method: "POST", mode: "no-cors", body }).catch(() => {});
+    d.official = false; // 2回目以降は練習扱い
+  }
+  return { recs, score };
+}
+function dailyShareText(key, recs, score) {
+  const row = recs.map((r) => (r.ok ? "🟩" : r.p == null ? "⬜" : "🟥")).join("");
+  const ps = recs.filter((r) => r.ok && r.p != null).map((r) => r.p);
+  const avg = ps.length ? Math.round((ps.reduce((a, b) => a + b, 0) / ps.length) * 100) : null;
+  const [, mm, dd] = key.split("-");
+  return [`簡単早押しクイズ 今日の10問 ${Number(mm)}/${Number(dd)}`, `${row} ${score}/${DAILY_COUNT}`, avg != null ? `⚡正解した問題は平均${avg}%で押した` : null, currentStreak() > 1 ? `🔥${currentStreak()}日連続` : null, SITE_URL].filter(Boolean).join("\n");
+}
+function dailyResultHTML(m) {
+  const d = client.daily, wasOfficial = d.official;
+  const { recs, score } = finishDaily(m);
+  const text = dailyShareText(d.key, recs, score);
+  const duel = d.ghosts.map((gh) => {
+    let w = 0, l = 0;
+    d.qids.forEach((id, i) => { const v = ghostDuel(recs[i], gh.map[id]); if (v > 0) w++; else if (v < 0) l++; });
+    return `<tr><td>👻${esc(gh.name)}</td><td>${gh.score}/${DAILY_COUNT}</td><td>${w}勝${l}敗${w > l ? " 🏆" : ""}</td></tr>`;
+  }).join("");
+  return `
+  <div class="card daily-result">
+    <h2>今日の10問の結果 ${wasOfficial ? "" : `<span class="muted">（2回目以降は練習扱い・記録は最初の1回）</span>`}</h2>
+    <div style="font-size:26px;letter-spacing:2px">${recs.map((r) => (r.ok ? "🟩" : r.p == null ? "⬜" : "🟥")).join("")}</div>
+    <p style="font-size:20px;margin:6px 0"><b>${score}</b> / ${DAILY_COUNT} 問正解　🔥 ${currentStreak()}日連続</p>
+    ${duel ? `<h3>ゴーストとの勝負</h3><table><tr><th>相手</th><th>正解数</th><th>あなたから見て</th></tr>${duel}</table><p class="muted">同じ問題で、正解した人のうち早く押した方の勝ち。</p>` : `<p class="muted">今日のゴーストはまだいません。あなたの記録が、次に遊ぶ人のゴーストになります。</p>`}
+    <h3>結果をシェア</h3>
+    <pre class="share-text">${esc(text)}</pre>
+    <div class="row">
+      <a class="btn" href="https://twitter.com/intent/tweet?text=${encodeURIComponent(text)}" target="_blank" rel="noopener">Xでポスト</a>
+      <a class="btn" href="https://line.me/R/share?text=${encodeURIComponent(text)}" target="_blank" rel="noopener">LINEで送る</a>
+      <button class="sub" id="share-copy">コピー</button>
+      ${navigator.share ? `<button class="sub" id="share-native">ほかのアプリで共有</button>` : ""}
+      <span class="muted" id="share-msg"></span>
+    </div>
+    <p class="muted">名前と成績は、ほかの人の「ゴースト」として表示されます。</p>
+  </div>`;
+}
+function bindDailyShare() {
+  const text = $(".share-text")?.textContent;
+  if (!text) return;
+  $("#share-copy").onclick = async () => { try { await navigator.clipboard.writeText(text); $("#share-msg").textContent = "コピーしました"; } catch { $("#share-msg").textContent = "コピーできませんでした"; } };
+  if ($("#share-native")) $("#share-native").onclick = () => navigator.share({ text }).catch(() => {});
+}
+
 // ---------- 画面: ホーム ----------
 function renderHome() {
   stopAll();
+  const done = dailyDone(), today = daily.days[todayKey()];
   app.innerHTML = `
+  <div class="card daily-card">
+    <h2>今日の10問 <span class="muted">${todayKey().slice(5).replace("-", "/")}</span></h2>
+    <p class="muted">全員共通の10問。ほかの人の記録（ゴースト）と早押しで勝負できます。${currentStreak() ? `🔥 ${currentStreak()}日連続` : ""}</p>
+    <div class="row"><button id="daily">${done ? "もう一度（練習）" : "挑戦する"}</button>${done ? `<span>今日の記録：<b>${today.score}</b> / ${DAILY_COUNT}</span>` : ""}</div>
+  </div>
   <div class="card">
     <h2>名前</h2>
     <div class="row"><input type="text" id="name" maxlength="16" value="${esc(profile.name)}"> <button class="sub" id="save-name">保存</button></div>
@@ -582,8 +747,9 @@ function renderHome() {
   <div class="card"><div class="row"><button class="sub" id="stats">自分の成績・問題ごとの記録を見る</button><button class="sub" id="submit-q">問題を投稿する</button></div></div>
   <p class="muted" style="text-align:center"><a href="privacy.html">プライバシーポリシー</a></p>`;
   $("#save-name").onclick = () => { profile.name = $("#name").value.trim() || profile.name; saveProfile(); };
-  $("#solo").onclick = () => createRoom(false);
-  $("#create").onclick = () => createRoom(true);
+  $("#solo").onclick = () => { client.daily = null; createRoom(false); };
+  $("#daily").onclick = startDaily;
+  $("#create").onclick = () => { client.daily = null; createRoom(true); };
   $("#join").onclick = () => joinRoom($("#code").value.trim());
   $("#stats").onclick = renderStats;
   $("#submit-q").onclick = renderSubmit;
@@ -641,7 +807,15 @@ function createRoom(online) {
   client.isHost = true;
   client.host = new Host(online);
   app.innerHTML = `<div class="card">部屋を準備しています…</div>`;
-  client.host.open(() => { client.host.handle(null, { t: "join", id: profile.id, name: profile.name, rating: profile.rating }); }, (err) => { alert(err); leaveRoom(); });
+  client.host.open(() => {
+    client.host.handle(null, { t: "join", id: profile.id, name: profile.name, rating: profile.rating });
+    if (client.daily) { // 今日の10問：方式1・10問・ふつうの速さで固定。答え方と読み上げはふだんの設定のまま
+      const s = defaultSettings();
+      client.host.settings = { ...s, mode: 1, count: DAILY_COUNT, charMs: 120 };
+      client.host.daily = client.daily.key;
+      client.host.start();
+    }
+  }, (err) => { alert(err); leaveRoom(); });
 }
 function joinRoom(code) {
   if (!/^\d{5}$/.test(code)) { alert("部屋番号は5桁の数字です"); return; }
@@ -663,7 +837,7 @@ function leaveRoom() {
   stopAll();
   if (client.host) client.host.close();
   if (client.peer) client.peer.destroy();
-  Object.assign(client, { host: null, conn: null, peer: null, isHost: false, game: null, paused: false });
+  Object.assign(client, { host: null, conn: null, peer: null, isHost: false, game: null, paused: false, daily: null });
   drawPause();
   renderHome();
 }
@@ -730,6 +904,7 @@ function renderGame() {
   <div class="card">
     <div class="row" style="justify-content:space-between"><b id="qno"></b><span class="muted">部屋のランク <span class="rank">${g.roomRank}</span>・${g.settings.mode === 1 ? "方式1" : "方式2"}・${g.settings.input === "voice" ? "音声入力" : "ひらがな4択"}</span></div>
     <div id="scoreboard" class="players"></div>
+    ${client.daily ? `<div id="ghostbar" class="players ghostbar"></div>` : ""}
   </div>
   <div class="card" id="game-card">
     <div id="qtext"></div>
@@ -759,6 +934,7 @@ function onQuestion(m) {
   $("#qno").textContent = `第${m.i + 1}問 / ${m.total}`;
   $("#answer-area").innerHTML = "";
   drawText();
+  drawGhosts(false);
   setStatus("まもなく出題…");
   updateBuzz();
   const tok = g.cur.token;
@@ -777,6 +953,7 @@ function streamTick(tok) {
   if (!c || c.token !== tok || c.paused) return;
   c.shown++;
   drawText();
+  checkGhosts();
   if (c.shown < c.chars.length) c.streamTimer = new PTimer(client.timers, () => streamTick(tok), client.game.settings.charMs);
 }
 function pauseStream() {
@@ -997,6 +1174,7 @@ function onReveal(m) {
   setStatus("");
   g.resultsLog = g.resultsLog || {};
   g.resultsLog[m.q.id] = m.results;
+  drawGhosts(true);
 }
 
 // ---------- 画面: ゲーム終了（ブーイング） ----------
@@ -1012,13 +1190,14 @@ function onEnd(m) {
   const myDelta = m.deltas[profile.id] || 0;
   if (!solo) { profile.rating += myDelta; profile.games = (profile.games || 0) + 1; saveProfile(); }
   const ranking = m.players.slice().sort((a, b) => (m.scores[b.id] || 0) - (m.scores[a.id] || 0));
-  app.innerHTML = `
+  const dailyHTML = client.daily ? dailyResultHTML(m) : "";
+  app.innerHTML = dailyHTML + (client.daily ? "" : `
   <div class="card">
     <h2>結果</h2>
     <table><tr><th>順位</th><th>名前</th><th>正解数</th><th>レーティング</th></tr>
     ${ranking.map((p, i) => `<tr><td>${i + 1}</td><td>${esc(p.name)}</td><td>${m.scores[p.id] || 0}</td><td>${solo ? "（1人プレイは変動なし）" : `${Math.round(p.rating)} → ${Math.round(p.rating + (m.deltas[p.id] || 0))}（${(m.deltas[p.id] || 0) >= 0 ? "+" : ""}${m.deltas[p.id] || 0}）`}</td></tr>`).join("")}
     </table>
-  </div>
+  </div>`) + `
   <div class="card">
     <h2>出た問題</h2>
     <p class="muted">悪い問題だと思ったら ${THUMB_DOWN.replace('width="22" height="22"', 'width="14" height="14"')} を押してください（もう一度押すと取り消し）。</p>
@@ -1029,7 +1208,8 @@ function onEnd(m) {
         <div class="row"><input type="text" class="boo-text" maxlength="200" placeholder="具体的に（例：○○も正解になる）" style="flex:1;min-width:200px"><button class="sub boo-send">理由を送る</button><span class="muted boo-sent"></span></div>
       </div></td></tr>`; }).join("")}</table>
   </div>
-  <div class="row">${client.isHost ? `<button id="again">部屋に戻る</button>` : `<span class="muted">部屋を立てた人が戻るのを待っています</span>`}<button class="sub" id="leave">部屋を出る</button></div>`;
+  <div class="row">${client.daily ? `<button id="leave">トップに戻る</button>` : `${client.isHost ? `<button id="again">部屋に戻る</button>` : `<span class="muted">部屋を立てた人が戻るのを待っています</span>`}<button class="sub" id="leave">部屋を出る</button>`}</div>`;
+  bindDailyShare();
   for (const b of document.querySelectorAll(".boo")) b.onclick = () => client.send({ t: "boo", qid: b.dataset.q, on: !g.myBoos.has(b.dataset.q) });
   for (const f of document.querySelectorAll(".boo-form")) {
     f.querySelector(".boo-send").onclick = () => {
@@ -1041,7 +1221,7 @@ function onEnd(m) {
     };
   }
   $("#leave").onclick = leaveRoom;
-  if (client.isHost) $("#again").onclick = () => client.host.lobby();
+  if (client.isHost && $("#again")) $("#again").onclick = () => client.host.lobby();
 }
 function drawBooButtons() {
   const g = client.game;
