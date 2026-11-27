@@ -85,7 +85,8 @@ function drawMe() {
 }
 
 // ===================== 問題の統計（正答率・ブーイング・問題レーティング） =====================
-// 構造: stats[qid] = { seen, answered, correct, byRank:{C:{answered,correct},...}, rating, boo:{correct,wrong,none} }
+// 構造: stats[qid] = { seen, answered, correct, byRank:{C:{answered,correct},...}, rating, boo:{correct,wrong,none},
+//                     pos:[10]（正解者が押した位置：問題文の0-10%,10-20%,…の件数）, booReasons:[{key,cat,name,reasons,text,at}] }
 // rating は「問題のレーティング」（将来案）。強い人が間違えると上がる。
 let stats = LS.get("ehq.stats", {});
 const saveStats = () => LS.set("ehq.stats", stats);
@@ -103,15 +104,20 @@ function accuracyFor(id, rank) {
   if (s.answered >= 3) return s.correct / s.answered;
   return null;
 }
+const BOO_REASONS = ["答えが複数ありうる", "事実の誤り", "易しすぎる", "難しすぎる", "問題文が分かりにくい", "読み・選択肢がおかしい", "その他"];
 const isBadCandidate = (s) => s && s.boo.correct >= 2 && s.boo.correct >= Math.max(1, s.correct) * 0.2;
+const POS_BINS = 10;
+const posBin = (pos) => Math.min(POS_BINS - 1, Math.max(0, Math.floor(pos * POS_BINS)));
 function recordReveal(q, results, players) {
   const s = qs(q.id);
+  s.pos ||= Array(POS_BINS).fill(0);
   s.seen += players.length;
   for (const [pid, r] of Object.entries(results)) {
     const p = players.find((x) => x.id === pid);
     const rating = p ? p.rating : 1000;
     const rk = rankOf(rating);
     s.answered++; if (r.ok) s.correct++;
+    if (r.ok && typeof r.pos === "number") s.pos[posBin(r.pos)]++;
     const br = (s.byRank[rk] ||= { answered: 0, correct: 0 });
     br.answered++; if (r.ok) br.correct++;
     // 問題レーティング（Elo）：プレイヤーが正解＝問題の負け
@@ -120,6 +126,25 @@ function recordReveal(q, results, players) {
   }
   saveStats();
 }
+
+// ===================== 自分の成績（アカウント単位） =====================
+// 将来アカウント機能（端末をまたいだ同期）を作るときに丸ごと移せるよう、プロフィールIDごとに分けて保存する。
+// 構造: { total:{seen,answered,correct}, genre:{[ジャンル]:{seen,answered,correct}}, pos:[10]（正解時の押し位置）, posWrong:[10] }
+const myKey = () => "ehq.me." + profile.id;
+let me = LS.get(myKey(), null) || { total: { seen: 0, answered: 0, correct: 0 }, genre: {}, pos: Array(POS_BINS).fill(0), posWrong: Array(POS_BINS).fill(0) };
+const saveMe = () => LS.set(myKey(), me);
+function recordMine(q, r) {
+  const gs = (me.genre[q.genre] ||= { seen: 0, answered: 0, correct: 0 });
+  for (const t of [me.total, gs]) { t.seen++; if (r) { t.answered++; if (r.ok) t.correct++; } }
+  if (r && typeof r.pos === "number") (r.ok ? me.pos : me.posWrong)[posBin(r.pos)]++;
+  saveMe();
+}
+// 押し位置の分布（10%刻みの棒グラフ）
+function posChart(bins, label) {
+  const n = bins.reduce((a, b) => a + b, 0), max = Math.max(1, ...bins);
+  return `<div class="pos-chart" title="${esc(label)}">${bins.map((v, i) => `<div class="pos-col"><div class="pos-bar" style="height:${Math.round((60 * v) / max)}px"></div><div class="pos-v">${v || ""}</div><div class="pos-l">${i * 10}%</div></div>`).join("")}</div><div class="muted">${esc(label)}（${n}件）</div>`;
+}
+const posAvg = (bins) => { const n = bins.reduce((a, b) => a + b, 0); return n ? Math.round(bins.reduce((a, v, i) => a + v * (i * 10 + 5), 0) / n) : null; };
 
 // ===================== かな処理 =====================
 const toHira = (s) => s.replace(/[ァ-ヶ]/g, (c) => String.fromCharCode(c.charCodeAt(0) - 0x60));
@@ -239,6 +264,7 @@ class Host {
     if (m.t === "buzz") this.onBuzz(pid, Number(m.elapsed), m.charIdx);
     else if (m.t === "answer") this.onAnswer(pid, !!m.ok, String(m.text || "").slice(0, 40));
     else if (m.t === "boo") this.onBoo(pid, m.qid, !!m.on);
+    else if (m.t === "booReason") this.onBooReason(pid, m);
     else if (m.t === "pause") this.setPaused(!!m.on, pid);
   }
   leave(pid) {
@@ -262,6 +288,7 @@ class Host {
     this.qlist = pickQuestions(s.count, this.roomRank);
     this.scores = Object.fromEntries(this.players.map((p) => [p.id, 0]));
     this.log = [];
+    this.gameId = rid();
     this.qi = -1;
     this.broadcast({ t: "start", total: this.qlist.length, players: this.startPlayers, roomRank: this.roomRank, settings: s });
     this.later(() => this.next(), 800);
@@ -301,7 +328,8 @@ class Host {
   onAnswer(pid, ok, text) {
     const c = this.cur;
     if (!c || c.closed || !c.rights.includes(pid) || c.results[pid]) return;
-    c.results[pid] = { ok, text };
+    const b = c.buzzes.find((x) => x.pid === pid), len = [...c.q.text].length;
+    c.results[pid] = { ok, text, pos: b && len ? Math.min(1, Number(b.charIdx) / len) : null };
     this.broadcast({ t: "answered", pid, ok, text });
     const allAnswered = c.rights.every((p) => c.results[p]);
     if (this.settings.mode === 1) return this.reveal();
@@ -335,6 +363,14 @@ class Host {
     const r = this.log.find((l) => l.qid === qid).results[pid];
     const cat = !r ? "none" : r.ok ? "correct" : "wrong";
     this.broadcast({ t: "boo", pid, qid, on, cat });
+  }
+  onBooReason(pid, m) {
+    if (!this.log || !this.log.some((l) => l.qid === m.qid)) return;
+    const r = this.log.find((l) => l.qid === m.qid).results[pid];
+    const cat = !r ? "none" : r.ok ? "correct" : "wrong";
+    const p = this.players.find((x) => x.id === pid);
+    const reasons = (Array.isArray(m.reasons) ? m.reasons : []).filter((x) => BOO_REASONS.includes(x));
+    this.broadcast({ t: "booReason", key: pid + ":" + this.gameId, qid: m.qid, cat, name: p ? p.name : "？", reasons, text: String(m.text || "").slice(0, 200), pid });
   }
   close() { if (this.peer) this.peer.destroy(); }
 }
@@ -414,6 +450,16 @@ const handlers = {
   reveal(m) { onReveal(m); },
   end(m) { onEnd(m); },
   pause(m) { onPause(m); },
+  booReason(m) {
+    const s = qs(m.qid);
+    s.booReasons ||= [];
+    const e = { key: m.key, cat: m.cat, name: m.name, reasons: m.reasons, text: m.text, at: new Date().toISOString() };
+    const i = s.booReasons.findIndex((x) => x.key === m.key);
+    if (i >= 0) s.booReasons[i] = e; else s.booReasons.push(e);
+    if (s.booReasons.length > 100) s.booReasons.splice(0, s.booReasons.length - 100);
+    saveStats();
+    if (m.pid === profile.id) { const el = document.querySelector(`.boo-form[data-q="${CSS.escape(m.qid)}"] .boo-sent`); if (el) el.textContent = "送りました"; }
+  },
   boo(m) {
     const s = qs(m.qid);
     s.boo[m.cat] = Math.max(0, s.boo[m.cat] + (m.on ? 1 : -1));
@@ -441,7 +487,7 @@ function renderHome() {
     </div>
     <p class="muted">早押しはクリックかスペースキー。答えはひらがな4択（1〜4キーでも選べます）か、音声入力。</p>
   </div>
-  <div class="card"><button class="sub" id="stats">問題ごとの正答率・ブーイングを見る</button></div>`;
+  <div class="card"><button class="sub" id="stats">自分の成績・問題ごとの記録を見る</button></div>`;
   $("#save-name").onclick = () => { profile.name = $("#name").value.trim() || profile.name; saveProfile(); };
   $("#solo").onclick = () => createRoom(false);
   $("#create").onclick = () => createRoom(true);
@@ -803,6 +849,7 @@ function onReveal(m) {
   drawScoreboard();
   drawText(true);
   recordReveal(m.q, m.results, g.players);
+  recordMine(m.q, m.results[profile.id]);
   const rows = Object.entries(m.results).map(([pid, r]) => `<div>${esc(nameOf(pid))}：<span class="${r.ok ? "result-ok" : "result-ng"}">${r.ok ? "○" : "×"}</span> <span class="muted">${esc(r.text)}</span></div>`).join("");
   $("#answer-area").innerHTML = `<div style="font-size:22px">正解：<b>${esc(m.q.answer)}</b> <span class="muted">（${esc(m.q.reading)}）</span></div>${rows || `<div class="muted">誰も押しませんでした</div>`}`;
   setStatus("");
@@ -833,16 +880,31 @@ function onEnd(m) {
   <div class="card">
     <h2>出た問題</h2>
     <p class="muted">悪い問題だと思ったら ${THUMB_DOWN.replace('width="22" height="22"', 'width="14" height="14"')} を押してください（もう一度押すと取り消し）。</p>
-    <table>${m.log.map((l) => { const q = QMAP[l.qid] || g.qs.find((x) => x.id === l.qid); const r = l.results[profile.id]; return `<tr><td>${esc(q.text)}<br><b>${esc(q.answer)}</b> <span class="muted">あなた：${!r ? "答えず" : r.ok ? "○" : "×"}</span></td><td><button class="boo" data-q="${esc(l.qid)}" title="ブーイング" aria-label="ブーイング" aria-pressed="false">${THUMB_DOWN}</button></td></tr>`; }).join("")}</table>
+    <table>${m.log.map((l) => { const q = QMAP[l.qid] || g.qs.find((x) => x.id === l.qid); const r = l.results[profile.id]; return `<tr><td>${esc(q.text)}<br><b>${esc(q.answer)}</b> <span class="muted">あなた：${!r ? "答えず" : r.ok ? "○" : "×"}</span></td><td><button class="boo" data-q="${esc(l.qid)}" title="ブーイング" aria-label="ブーイング" aria-pressed="false">${THUMB_DOWN}</button></td></tr>
+      <tr class="boo-row" data-q="${esc(l.qid)}" hidden><td colspan="2"><div class="boo-form" data-q="${esc(l.qid)}">
+        <div class="muted">ブーイングの理由（任意・いくつでも）</div>
+        <div class="boo-reasons">${BOO_REASONS.map((x) => `<label><input type="checkbox" value="${esc(x)}"> ${esc(x)}</label>`).join("")}</div>
+        <div class="row"><input type="text" class="boo-text" maxlength="200" placeholder="具体的に（例：○○も正解になる）" style="flex:1;min-width:200px"><button class="sub boo-send">理由を送る</button><span class="muted boo-sent"></span></div>
+      </div></td></tr>`; }).join("")}</table>
   </div>
   <div class="row">${client.isHost ? `<button id="again">部屋に戻る</button>` : `<span class="muted">部屋を立てた人が戻るのを待っています</span>`}<button class="sub" id="leave">部屋を出る</button></div>`;
   for (const b of document.querySelectorAll(".boo")) b.onclick = () => client.send({ t: "boo", qid: b.dataset.q, on: !g.myBoos.has(b.dataset.q) });
+  for (const f of document.querySelectorAll(".boo-form")) {
+    f.querySelector(".boo-send").onclick = () => {
+      const reasons = [...f.querySelectorAll("input[type=checkbox]:checked")].map((x) => x.value);
+      const text = f.querySelector(".boo-text").value.trim();
+      if (!reasons.length && !text) { f.querySelector(".boo-sent").textContent = "理由を選ぶか書いてください"; return; }
+      f.querySelector(".boo-sent").textContent = "送信中…";
+      client.send({ t: "booReason", qid: f.dataset.q, reasons, text });
+    };
+  }
   $("#leave").onclick = leaveRoom;
   if (client.isHost) $("#again").onclick = () => client.host.lobby();
 }
 function drawBooButtons() {
   const g = client.game;
   for (const b of document.querySelectorAll(".boo")) { const on = g.myBoos.has(b.dataset.q); b.classList.toggle("on", on); b.setAttribute("aria-pressed", on); }
+  for (const r of document.querySelectorAll(".boo-row")) r.hidden = !g.myBoos.has(r.dataset.q);
 }
 
 // ---------- 画面: 統計 ----------
@@ -850,19 +912,35 @@ function renderStats() {
   stopAll();
   const rows = window.QUESTIONS.map((q) => ({ q, s: stats[q.id] })).sort((a, b) => (b.s?.answered || 0) - (a.s?.answered || 0));
   const pct = (c, a) => (a ? Math.round((100 * c) / a) + "%" : "—");
+  const genres = Object.entries(me.genre).sort((a, b) => b[1].answered - a[1].answered);
+  const reasonCount = (s) => { const c = {}; for (const e of s.booReasons || []) for (const r of e.reasons) c[r] = (c[r] || 0) + 1; return Object.entries(c).sort((a, b) => b[1] - a[1]).map(([k, v]) => `${k}×${v}`).join("、"); };
+  const reasonTexts = (s) => (s.booReasons || []).filter((e) => e.text).map((e) => `${e.name}（${e.cat === "correct" ? "正解者" : e.cat === "wrong" ? "不正解者" : "未解答"}）：${e.text}`).join("\n");
   app.innerHTML = `
+  <div class="card">
+    <h2>あなたの成績（${esc(profile.name)}）</h2>
+    <p>全体：出題 ${me.total.seen}問 ／ 解答 ${me.total.answered}問 ／ 正解 ${me.total.correct}問 ／ 正答率 <b>${pct(me.total.correct, me.total.answered)}</b>（押した問題のうち） ／ 出題に対する正解率 ${pct(me.total.correct, me.total.seen)}</p>
+    <table><tr><th>ジャンル</th><th>出題</th><th>解答</th><th>正解</th><th>正答率</th><th>正解率（出題比）</th></tr>
+    ${genres.map(([k, v]) => `<tr><td>${esc(k)}</td><td>${v.seen}</td><td>${v.answered}</td><td>${v.correct}</td><td>${pct(v.correct, v.answered)}</td><td>${pct(v.correct, v.seen)}</td></tr>`).join("") || `<tr><td colspan="6" class="muted">まだ記録がありません</td></tr>`}
+    </table>
+    <h3>押した位置（問題文の何%まで出たところで押したか）</h3>
+    <div class="row" style="align-items:flex-start;gap:30px">
+      <div>${posChart(me.pos, "正解したとき")}${posAvg(me.pos) != null ? `<div class="muted">平均 約${posAvg(me.pos)}%</div>` : ""}</div>
+      <div>${posChart(me.posWrong, "不正解だったとき")}${posAvg(me.posWrong) != null ? `<div class="muted">平均 約${posAvg(me.posWrong)}%</div>` : ""}</div>
+    </div>
+    <p class="muted">記録はこの端末のこの名前（プロフィール）に保存されます。端末をまたいだアカウント機能は未対応です。</p>
+  </div>
   <div class="card">
     <h2>問題ごとの記録（この端末）</h2>
     <p class="muted">正答率＝正解数 ÷ 答えた人数。ランク別はそのランクで${RANK_MIN_SAMPLES}件以上たまると出題の重み付けに使います。悪問候補＝正解した人から2件以上、かつ正解数の2割以上のブーイング。</p>
-    <table><tr><th>ジャンル</th><th>答え</th><th>答えた</th><th>正答率</th><th>ランク別</th><th>問題レート</th><th>ブーイング（正解者/不正解者/未解答）</th></tr>
-    ${rows.map(({ q, s }) => `<tr><td>${esc(q.genre)}</td><td>${esc(q.answer)}</td><td>${s?.answered || 0}</td><td>${pct(s?.correct, s?.answered)}</td><td>${s ? Object.entries(s.byRank).map(([k, v]) => `${k}:${pct(v.correct, v.answered)}`).join(" ") : ""}</td><td>${s ? Math.round(s.rating) : ""}</td><td>${s ? `${s.boo.correct}/${s.boo.wrong}/${s.boo.none}` : ""}${isBadCandidate(s) ? ` <b class="result-ng">悪問候補</b>` : ""}</td></tr>`).join("")}
+    <table><tr><th>ジャンル</th><th>答え</th><th>答えた</th><th>正答率</th><th>ランク別</th><th>問題レート</th><th>正解時の押し位置</th><th>ブーイング（正解者/不正解者/未解答）</th><th>ブーイングの理由</th></tr>
+    ${rows.map(({ q, s }) => `<tr><td>${esc(q.genre)}</td><td>${esc(q.answer)}</td><td>${s?.answered || 0}</td><td>${pct(s?.correct, s?.answered)}</td><td>${s ? Object.entries(s.byRank).map(([k, v]) => `${k}:${pct(v.correct, v.answered)}`).join(" ") : ""}</td><td>${s ? Math.round(s.rating) : ""}</td><td>${s?.pos && posAvg(s.pos) != null ? `平均${posAvg(s.pos)}%（${s.pos.reduce((a, b) => a + b, 0)}件）` : ""}</td><td>${s ? `${s.boo.correct}/${s.boo.wrong}/${s.boo.none}` : ""}${isBadCandidate(s) ? ` <b class="result-ng">悪問候補</b>` : ""}</td><td>${s ? `<span title="${esc(reasonTexts(s))}">${esc(reasonCount(s))}${reasonTexts(s) ? " 💬" : ""}</span>` : ""}</td></tr>`).join("")}
     </table>
     <div class="row" style="margin-top:12px"><button class="sub" id="back">戻る</button><button class="sub" id="export">記録をJSONで保存</button></div>
   </div>`;
   $("#back").onclick = renderHome;
   $("#export").onclick = () => {
     const a = document.createElement("a");
-    a.href = URL.createObjectURL(new Blob([JSON.stringify({ profile, stats }, null, 1)], { type: "application/json" }));
+    a.href = URL.createObjectURL(new Blob([JSON.stringify({ profile, me, stats }, null, 1)], { type: "application/json" }));
     a.download = "easy-hayaoshi-stats.json"; a.click();
   };
 }

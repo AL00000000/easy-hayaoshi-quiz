@@ -40,3 +40,13 @@ th, td { border-bottom: 1px solid #ddd; padding: 6px; text-align: left; vertical
 #pause-overlay { position: absolute; inset: 0; background: rgba(244,241,234,.97); border-radius: 10px; display: flex; align-items: center; justify-content: center; text-align: center; z-index: 5; }
 #pause-btn { padding: 4px 12px; }
 .boo { display: inline-flex; align-items: center; justify-content: center; width: 44px; height: 38px; padding: 0; }
+
+/* 押した位置の分布 */
+.pos-chart { display: flex; align-items: flex-end; gap: 4px; height: 100px; }
+.pos-col { display: flex; flex-direction: column; align-items: center; justify-content: flex-end; width: 30px; height: 100%; }
+.pos-bar { width: 22px; background: #263a5c; border-radius: 3px 3px 0 0; }
+.pos-v { font-size: 11px; color: #333; min-height: 14px; }
+.pos-l { font-size: 10px; color: #888; }
+/* ブーイングの理由 */
+.boo-form { background: #f6f0fa; border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; }
+.boo-reasons { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0; font-size: 14px; }
