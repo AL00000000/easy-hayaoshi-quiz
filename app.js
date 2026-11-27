@@ -396,7 +396,7 @@ class Host {
     this.startPlayers = this.players.map((p) => ({ ...p }));
     const avg = this.players.reduce((a, p) => a + p.rating, 0) / this.players.length;
     this.roomRank = rankOf(avg);
-    this.qlist = this.daily ? dailyQuestions(this.daily.key, this.daily.mode) : !this.online && newModeDays() ? pickNewQuestions(s.count, s.genre) : pickQuestions(s.count, this.roomRank, s.genre);
+    this.qlist = this.daily ? dailyQuestions(this.daily.key, this.daily.mode) : !this.online && newModeDays() ? pickNewQuestions(s.count, s.genre, s.pstats) : pickQuestions(s.count, this.roomRank, s.genre, s.pstats);
     this.scores = Object.fromEntries(this.players.map((p) => [p.id, 0]));
     this.log = [];
     this.gameId = rid();
@@ -488,7 +488,8 @@ class Host {
 
 const nameOfPlayer = (players, pid) => (players.find((p) => p.id === pid) || {}).name || "？";
 function defaultSettings() {
-  const s = Object.assign({ mode: 1, input: "choice", pct: 50, count: 10, tts: true, charMs: 120, genre: "all" }, LS.get("ehq.settings", {}));
+  const s = Object.assign({ mode: 1, input: "choice", pct: 50, count: 10, tts: true, charMs: 120, genre: "all", pstats: "mix" }, LS.get("ehq.settings", {}));
+  if (s.pstats === true) s.pstats = "mix"; else if (s.pstats === false) s.pstats = "off";
   if (EDITION !== "all") s.genre = EDITION; // ポケモン版・株式版は常にそのジャンルだけ
   return s;
 }
@@ -496,6 +497,24 @@ function defaultSettings() {
 // 正答率の低い問題ほど高ランクの部屋で多く出す
 // ジャンルの絞り込み（"all" ならすべて）
 const GENRE_FILTERS = { all: ["すべて", () => true], pokemon: ["ポケモンだけ", (q) => q.genre === "ポケモン" || /ポケモン|ポケットモンスター/.test(q.text)], stock: ["株式だけ", (q) => q.genre === "株式"] };
+// 種族値の問題（ポケモン版の細かいジャンル「種族値」）は、ポケモンだけを出すときに設定で選ぶ（本人の要望・2026-11-28）。
+//   off＝出さない／mix＝まぜる（数が多いので、出題の約3割になるように重みを下げる）／only＝種族値だけ
+// 全体版の「すべて」と今日の10問には出さない（全員が同じ問題を解く今日の10問を、設定で変えないため）
+const isStatQ = (q) => q.sub === "種族値";
+const STATS_MODES = [["off", "出さない"], ["mix", "まぜる（約3割）"], ["only", "種族値だけ"]];
+const STATS_MIX_SHARE = 0.3;
+// 2026-11-28 に足したポケモンの問題（08_pokemon の113問目以降）は、その日の今日の10問を途中で変えないように 11/29 から入れる
+const addedLater = (q, key) => key < "2026-11-29" && /^08_pokemon-(\d+)$/.test(q.id) && Number(q.id.slice(11)) > 112;
+function genrePool(genre = "all", stats = "off") {
+  const base = window.QUESTIONS.filter((GENRE_FILTERS[genre] || GENRE_FILTERS.all)[1]);
+  if (genre !== "pokemon" || !stats || stats === "off") return base.filter((q) => !isStatQ(q));
+  return stats === "only" ? base.filter(isStatQ) : base;
+}
+// まぜるとき、種族値の問題1問あたりの重み（種族値の問題の重みの合計が全体の約3割になる）
+function statsWeight(pool) {
+  const n = pool.filter(isStatQ).length, m = pool.length - n;
+  return n && m ? (STATS_MIX_SHARE / (1 - STATS_MIX_SHARE)) * (m / n) : 1;
+}
 // ----- 新問モード（隠しコマンド。問題を足した・直したときの確認用）-----
 // Alt+N（スマホはヘッダーの名前の欄を5回続けてタップ）で 切 → 直近1日 → 直近3日 → 直近7日 → 切 と切り替わる。
 // オンのとき、ひとり練習では最近足した・直した問題（q.added）だけを新しい順に出す。部屋と今日の10問には効かない
@@ -508,13 +527,13 @@ function cycleNewMode() {
   if (!client.game || client.game.over) renderHome();
   alert(d ? `新問モード：オン（直近${d}日に足した・直した問題だけ。ひとり練習のみ）` : "新問モード：オフ");
 }
-function newPool(genre = "all") {
+function newPool(genre = "all", stats = defaultSettings().pstats) {
   const since = todayKey(-(newModeDays() - 1));
-  return window.QUESTIONS.filter((GENRE_FILTERS[genre] || GENRE_FILTERS.all)[1]).filter((q) => q.added && q.added >= since);
+  return genrePool(genre, stats).filter((q) => q.added && q.added >= since);
 }
-function pickNewQuestions(count, genre) {
-  const pool = newPool(genre);
-  if (!pool.length) return pickQuestions(count, rankOf(profile.rating), genre);
+function pickNewQuestions(count, genre, stats) {
+  const pool = newPool(genre, stats);
+  if (!pool.length) return pickQuestions(count, rankOf(profile.rating), genre, stats);
   return shuffle(pool).sort((a, b) => (a.added < b.added ? 1 : a.added > b.added ? -1 : 0)).slice(0, count);
 }
 document.addEventListener("keydown", (e) => { if (e.altKey && !e.ctrlKey && !e.shiftKey && e.code === "KeyN") { e.preventDefault(); cycleNewMode(); } });
@@ -526,14 +545,16 @@ document.addEventListener("click", (e) => {
   if (newModeTaps.length >= 5) { newModeTaps = []; cycleNewMode(); }
 });
 
-function pickQuestions(count, rank, genre = "all") {
+function pickQuestions(count, rank, genre = "all", stats = "off") {
   const target = RANK_TARGET[rank];
-  const pool = window.QUESTIONS.filter((GENRE_FILTERS[genre] || GENRE_FILTERS.all)[1]);
+  const pool = genrePool(genre, stats);
+  const sw = stats === "mix" ? statsWeight(pool) : 1;
   const items = pool.map((q) => {
     const acc = accuracyFor(q.id, rank);
     const p = acc == null ? 0.6 : acc; // データがない問題は「やや易しい」とみなす
     let w = Math.exp(-((p - target) ** 2) / (2 * 0.2 ** 2)) + 0.05;
     if (isBadCandidate(stats[q.id])) w *= 0.3;
+    if (isStatQ(q)) w *= sw;
     if (genre === "stock") w *= q.weight || 1; // 出やすさ（株式版だけ。日経平均の構成銘柄などの大型株を重くしてある。本人の要望）
     return { q, w };
   });
@@ -657,7 +678,7 @@ function mix32(h) { h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 13; 
 function hash32(str) { let h = 0x811c9dc5; for (const ch of str) { h ^= ch.codePointAt(0); h = Math.imul(h, 16777619) >>> 0; } return h; }
 // 日付と問題IDのハッシュが小さい順に10問。全員が同じ10問になる（問題が増えても大半は変わらない）
 function dailyQuestions(key, mode = "all") {
-  const pool = window.QUESTIONS.filter(GENRE_FILTERS[mode][1]);
+  const pool = genrePool(mode, "off").filter((q) => !addedLater(q, key));
   const salt = mode === "all" ? "" : mode + "|";
   // 2026-11-28 からは出やすさ（q.weight）を反映し、ハッシュも混ぜて偏りをなくす（その日の途中で10問が変わらないよう、27日までは従来のまま）
   const useW = key >= "2026-11-28", wOf = (q) => (mode === "stock" ? q.weight || 1 : 1); // 出やすさは株式版だけ
@@ -1021,6 +1042,7 @@ function renderLobby() {
         <option value="voice" ${s.input === "voice" ? "selected" : ""} ${s.mode === 2 ? "disabled" : ""}>音声入力${s.mode === 2 ? "（方式2では使えません）" : ""}</option>
       </select></label>
     <label ${EDITION !== "all" ? 'style="display:none"' : ""}>ジャンル <select id="s-genre" ${dis}>${Object.entries(GENRE_FILTERS).map(([k, [l]]) => `<option value="${k}" ${(s.genre || "all") === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+    <label id="pstats-row" ${EDITION === "pokemon" || (EDITION === "all" && s.genre === "pokemon") ? "" : 'style="display:none"'}>種族値の問題（合計とHABCDSから答える） <select id="s-pstats" ${dis}>${STATS_MODES.map(([v, l]) => `<option value="${v}" ${(s.pstats || "mix") === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
     <label>問題数 <select id="s-count" ${dis}>${[5, 10, 15, 20].map((v) => `<option ${s.count === v ? "selected" : ""}>${v}</option>`).join("")}</select></label>
     <label>文字の速さ <select id="s-speed" ${dis}>${[[160, "ゆっくり"], [120, "ふつう"], [85, "はやい"]].map(([v, l]) => `<option value="${v}" ${s.charMs === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
     <label><input type="checkbox" id="s-tts" ${s.tts ? "checked" : ""} ${dis}> 問題文を音声で読み上げる</label>
@@ -1035,12 +1057,13 @@ function renderLobby() {
     const mode = Number($("#s-mode").value);
     let input = $("#s-input").value;
     if (mode === 2) input = "choice"; // 方式2は同時に複数人が答えるため音声入力は不可
-    const ns = { mode, input, pct: Number($("#s-pct").value), count: Number($("#s-count").value), charMs: Number($("#s-speed").value), tts: $("#s-tts").checked, genre: EDITION !== "all" ? EDITION : $("#s-genre").value };
+    $("#pstats-row").style.display = EDITION === "pokemon" || (EDITION === "all" && $("#s-genre").value === "pokemon") ? "" : "none";
+    const ns = { mode, input, pct: Number($("#s-pct").value), count: Number($("#s-count").value), charMs: Number($("#s-speed").value), tts: $("#s-tts").checked, pstats: $("#s-pstats").value, genre: EDITION !== "all" ? EDITION : $("#s-genre").value };
     if (EDITION !== "all") { LS.set("ehq.settings", { ...ns, genre: LS.get("ehq.settings", {}).genre || "all" }); client.host.setSettings(ns); return; }
     LS.set("ehq.settings", ns);
     client.host.setSettings(ns);
   };
-  for (const id of ["s-mode", "s-pct", "s-input", "s-count", "s-speed", "s-tts", "s-genre"]) $("#" + id).onchange = read;
+  for (const id of ["s-mode", "s-pct", "s-input", "s-count", "s-speed", "s-tts", "s-genre", "s-pstats"]) $("#" + id).onchange = read;
   $("#go").onclick = () => client.host.start();
 }
 
@@ -1078,7 +1101,7 @@ function onQuestion(m) {
   g.cur = { q: m.q, chars: [...m.q.text], shown: 0, t0: null, pausedMs: 0, myState: "wait", token: rid(), slots: m.slots };
   Sound.start();
   g.qs.push(m.q);
-  $("#qno").textContent = `第${m.i + 1}問 / ${m.total}`;
+  $("#qno").textContent = `第${m.i + 1}問 / ${m.total}${m.q.sub ? `（${m.q.sub}）` : ""}`;
   $("#answer-area").innerHTML = "";
   drawText();
   drawGhosts(false);

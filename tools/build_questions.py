@@ -6,6 +6,8 @@
   - 問題文を「◇」で区切ると、出し方が複数ある問題になる（出題のたびに1つを選ぶ。「証券コード」から始まる文は合わせて20%）
   - 出やすさは数字。省略すると問題文の数（◇で区切った数）になる。株式の大型株（日経平均の構成銘柄）は問題文を3通りにして3
   - 問題を消すときは、行を消さずにジャンルを「削除」にする（番号がずれない）
+  - ジャンルは「ポケモン/アニメ」のように「/」で細かいジャンルを付けられる（genre=ポケモン、sub=アニメ。版の絞り込みと成績は大きいジャンルで行う）
+  - 細かいジャンルが「種族値」の問題は、ポケモン版で設定をオンにしたときだけ出る（答えはほかの問題と重なってよい）
   - 「元素記号Xx」は読み上げで自動的にアルファベット読みにする
 使い方: python tools/build_questions.py
 """
@@ -90,7 +92,10 @@ def main():
             n += 1
             texts = [x.strip() for x in text.split("◇") if x.strip()]
             text = texts[0]
-            q = {"id": f"{base}-{n:03d}", "genre": genre, "text": text, "answer": answer, "reading": reading,
+            sub = ""
+            if "/" in genre:
+                genre, sub = [x.strip() for x in genre.split("/", 1)]
+            q = {"id": f"{base}-{n:03d}", "genre": genre, **({"sub": sub} if sub else {}), "text": text, "answer": answer, "reading": reading,
                  "accept": [a for a in accept.split(";") if a]}
             t = tts or tts_for(text)
             if t:
@@ -116,14 +121,18 @@ def main():
 
     old = existing_questions()
     seen = {norm(q["answer"]): q["id"] for q in old}
+    # 同じ読みでも別のものを指す答え（果物のミカンと、ジムリーダーのミカン）は重複として扱わない
+    DUP_OK = {"みかん"}
+    seen_stats = {}  # 種族値の問題は、ほかの問題と答えが重なってよい（種族値の問題どうしでは重ならないようにする）
     for q in rows:
         w = q["_where"]
         if not re.fullmatch(r"[ぁ-んー]+", q["reading"]):
             problems.append(f"{w} 読みがひらがなでない: {q['reading']} ({q['answer']})")
         na = norm(q["answer"])
-        if na in seen:
-            problems.append(f"{w} 答えが重複: {q['answer']}（{seen[na]}）")
-        seen[na] = q["id"]
+        sd = seen_stats if q.get("sub") == "種族値" else seen
+        if na in sd and na not in DUP_OK:
+            problems.append(f"{w} 答えが重複: {q['answer']}（{sd[na]}）")
+        sd[na] = q["id"]
         for vt in [v["text"] for v in q.get("variants", [])] or [q["text"]]:
             t = norm(vt)
             for a in {q["answer"], q["reading"], *q["accept"]}:
