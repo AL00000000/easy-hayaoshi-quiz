@@ -377,7 +377,7 @@ class Host {
     this.startPlayers = this.players.map((p) => ({ ...p }));
     const avg = this.players.reduce((a, p) => a + p.rating, 0) / this.players.length;
     this.roomRank = rankOf(avg);
-    this.qlist = this.daily ? dailyQuestions(this.daily) : pickQuestions(s.count, this.roomRank, s.genre);
+    this.qlist = this.daily ? dailyQuestions(this.daily.key, this.daily.mode) : pickQuestions(s.count, this.roomRank, s.genre);
     this.scores = Object.fromEntries(this.players.map((p) => [p.id, 0]));
     this.log = [];
     this.gameId = rid();
@@ -469,7 +469,9 @@ class Host {
 
 const nameOfPlayer = (players, pid) => (players.find((p) => p.id === pid) || {}).name || "？";
 function defaultSettings() {
-  return Object.assign({ mode: 1, input: "choice", pct: 50, count: 10, tts: true, charMs: 120, genre: "all" }, LS.get("ehq.settings", {}));
+  const s = Object.assign({ mode: 1, input: "choice", pct: 50, count: 10, tts: true, charMs: 120, genre: "all" }, LS.get("ehq.settings", {}));
+  if (EDITION === "pokemon") s.genre = "pokemon"; // ポケモン版は常にポケモンだけ
+  return s;
 }
 
 // 正答率の低い問題ほど高ランクの部屋で多く出す
@@ -571,20 +573,29 @@ const DAILY_FORM = "https://docs.google.com/forms/d/e/1FAIpQLSfR60v7eP7eKWKhj-7J
 const DAILY_FIELDS = { date: "entry.1524584379", name: "entry.1927649045", rec: "entry.732693691", score: "entry.455250847" };
 const DAILY_SHEET = "https://docs.google.com/spreadsheets/d/1v7S6vgtqQ9nWrvLPNtPEdW0XrfrU5N4ejDxgeVhGwSs/gviz/tq";
 const SITE_URL = "https://al00000000.github.io/easy-hayaoshi-quiz/";
+// 版：全体版（/）とポケモン版（/pokemon/）は URL を分ける。ポケモン版は pokemon/index.html で EHQ_EDITION を設定する
+const EDITION = window.EHQ_EDITION === "pokemon" ? "pokemon" : "all";
+const BASE = EDITION === "all" ? "" : "../"; // サイト直下のファイル（プライバシーポリシーなど）への相対パス
+const EDITION_URL = { all: SITE_URL, pokemon: SITE_URL + "pokemon/" };
 // 日本時間の日付（YYYY-MM-DD）
 const todayKey = (offsetDays = 0) => new Date(Date.now() + 9 * 3600e3 + offsetDays * 86400e3).toISOString().slice(0, 10);
 // シートで日付に自動変換されないよう、記録には「d20261127」の形で書く
-const dailyTag = (key) => "d" + key.replace(/-/g, "");
+// ジャンルごとに別の記録にする（全体は d、ポケモンは p）
+const DAILY_MODES = { all: { label: "今日の10問", tag: "d", ls: "ehq.daily" }, pokemon: { label: "今日の10問（ポケモン）", tag: "p", ls: "ehq.daily.pokemon" } };
+const dailyTag = (key, mode = "all") => DAILY_MODES[mode].tag + key.replace(/-/g, "");
 function hash32(str) { let h = 0x811c9dc5; for (const ch of str) { h ^= ch.codePointAt(0); h = Math.imul(h, 16777619) >>> 0; } return h; }
 // 日付と問題IDのハッシュが小さい順に10問。全員が同じ10問になる（問題が増えても大半は変わらない）
-function dailyQuestions(key) {
-  return window.QUESTIONS.map((q) => ({ q, h: hash32(key + "|" + q.id) })).sort((a, b) => a.h - b.h).slice(0, DAILY_COUNT).map((x) => x.q);
+function dailyQuestions(key, mode = "all") {
+  const pool = window.QUESTIONS.filter(GENRE_FILTERS[mode][1]);
+  const salt = mode === "all" ? "" : mode + "|";
+  return pool.map((q) => ({ q, h: hash32(salt + key + "|" + q.id) })).sort((a, b) => a.h - b.h).slice(0, DAILY_COUNT).map((x) => x.q);
 }
-let daily = LS.get("ehq.daily", { streak: 0, best: 0, last: null, days: {} });
-const saveDaily = () => LS.set("ehq.daily", daily);
-const dailyDone = (key = todayKey()) => !!daily.days[key];
+const dailyStates = {};
+const dailyState = (mode = "all") => (dailyStates[mode] ||= LS.get(DAILY_MODES[mode].ls, { streak: 0, best: 0, last: null, days: {} }));
+const saveDaily = (mode = "all") => LS.set(DAILY_MODES[mode].ls, dailyState(mode));
+const dailyDone = (mode = "all", key = todayKey()) => !!dailyState(mode).days[key];
 // 連続日数（最後に挑戦した日が昨日より前なら途切れている）
-const currentStreak = () => (daily.last === todayKey() || daily.last === todayKey(-1) ? daily.streak : 0);
+const currentStreak = (mode = "all") => { const d = dailyState(mode); return d.last === todayKey(-1) || d.last === todayKey() ? d.streak : 0; };
 
 // ----- ゴースト（その日にほかの人が残した記録） -----
 function parseCSV(text) {
@@ -600,8 +611,8 @@ function parseCSV(text) {
   if (cur || row.length) { row.push(cur); rows.push(row); }
   return rows;
 }
-async function loadGhosts(key, qids) {
-  const tq = encodeURIComponent(`select C,D,E where B='${dailyTag(key)}' order by A desc limit 300`);
+async function loadGhosts(key, qids, mode = "all") {
+  const tq = encodeURIComponent(`select C,D,E where B='${dailyTag(key, mode)}' order by A desc limit 300`);
   const ctl = new AbortController(); const timer = setTimeout(() => ctl.abort(), 4000);
   try {
     const text = await fetch(`${DAILY_SHEET}?tqx=out:csv&tq=${tq}`, { signal: ctl.signal }).then((r) => r.text());
@@ -630,11 +641,11 @@ function ghostDuel(me, gh) {
   return mo ? 1 : go ? -1 : 0;
 }
 
-async function startDaily() {
-  const key = todayKey(), qs = dailyQuestions(key);
-  app.innerHTML = `<div class="card">今日の10問を準備しています…</div>`;
-  const ghosts = await loadGhosts(key, qs.map((q) => q.id));
-  client.daily = { key, official: !dailyDone(key), ghosts, qids: qs.map((q) => q.id) };
+async function startDaily(mode = "all") {
+  const key = todayKey(), qs = dailyQuestions(key, mode);
+  app.innerHTML = `<div class="card">${DAILY_MODES[mode].label}を準備しています…</div>`;
+  const ghosts = await loadGhosts(key, qs.map((q) => q.id), mode);
+  client.daily = { key, mode, official: !dailyDone(mode, key), ghosts, qids: qs.map((q) => q.id) };
   createRoom(false);
 }
 // 1問ごとのゴースト表示（押した瞬間にチップを出し、正解発表で結果を出す）
@@ -663,16 +674,16 @@ function checkGhosts() {
 
 // ----- 終了時：記録・連続日数・送信・シェア -----
 function finishDaily(m) {
-  const d = client.daily, key = d.key;
+  const d = client.daily, key = d.key, mode = d.mode || "all", daily = dailyState(mode);
   const recs = d.qids.map((id) => { const l = m.log.find((x) => x.qid === id), r = l?.results[profile.id]; return { p: r && typeof r.pos === "number" ? r.pos : null, ok: !!r?.ok }; });
   const score = recs.filter((r) => r.ok).length;
   if (d.official) {
     daily.days[key] = { score, r: recs.map((r) => [r.p == null ? -1 : Math.round(r.p * 100), r.ok ? 1 : 0]) };
     daily.streak = daily.last === todayKey(-1) ? daily.streak + 1 : daily.last === key ? daily.streak : 1;
     daily.last = key; daily.best = Math.max(daily.best || 0, score);
-    saveDaily();
+    saveDaily(mode);
     const body = new URLSearchParams();
-    body.append(DAILY_FIELDS.date, dailyTag(key));
+    body.append(DAILY_FIELDS.date, dailyTag(key, mode));
     body.append(DAILY_FIELDS.name, profile.name);
     body.append(DAILY_FIELDS.rec, JSON.stringify({ v: 1, u: profile.id, q: d.qids, r: daily.days[key].r }));
     body.append(DAILY_FIELDS.score, String(score));
@@ -681,17 +692,18 @@ function finishDaily(m) {
   }
   return { recs, score };
 }
-function dailyShareText(key, recs, score) {
+function dailyShareText(key, recs, score, mode = "all") {
   const row = recs.map((r) => (r.ok ? "🟩" : r.p == null ? "⬜" : "🟥")).join("");
   const ps = recs.filter((r) => r.ok && r.p != null).map((r) => r.p);
   const avg = ps.length ? Math.round((ps.reduce((a, b) => a + b, 0) / ps.length) * 100) : null;
   const [, mm, dd] = key.split("-");
-  return [`簡単早押しクイズ 今日の10問 ${Number(mm)}/${Number(dd)}`, `${row} ${score}/${DAILY_COUNT}`, avg != null ? `⚡正解した問題は平均${avg}%で押した` : null, currentStreak() > 1 ? `🔥${currentStreak()}日連続` : null, SITE_URL].filter(Boolean).join("\n");
+  return [`簡単早押しクイズ ${DAILY_MODES[mode].label} ${Number(mm)}/${Number(dd)}`, `${row} ${score}/${DAILY_COUNT}`, avg != null ? `⚡正解した問題は平均${avg}%で押した` : null, currentStreak(mode) > 1 ? `🔥${currentStreak(mode)}日連続` : null, EDITION_URL[mode]].filter(Boolean).join("\n");
 }
 function dailyResultHTML(m) {
   const d = client.daily, wasOfficial = d.official;
   const { recs, score } = finishDaily(m);
-  const text = dailyShareText(d.key, recs, score);
+  const mode = d.mode || "all";
+  const text = dailyShareText(d.key, recs, score, mode);
   const duel = d.ghosts.map((gh) => {
     let w = 0, l = 0;
     d.qids.forEach((id, i) => { const v = ghostDuel(recs[i], gh.map[id]); if (v > 0) w++; else if (v < 0) l++; });
@@ -699,9 +711,9 @@ function dailyResultHTML(m) {
   }).join("");
   return `
   <div class="card daily-result">
-    <h2>今日の10問の結果 ${wasOfficial ? "" : `<span class="muted">（2回目以降は練習扱い・記録は最初の1回）</span>`}</h2>
+    <h2>${DAILY_MODES[mode].label}の結果 ${wasOfficial ? "" : `<span class="muted">（2回目以降は練習扱い・記録は最初の1回）</span>`}</h2>
     <div style="font-size:26px;letter-spacing:2px">${recs.map((r) => (r.ok ? "🟩" : r.p == null ? "⬜" : "🟥")).join("")}</div>
-    <p style="font-size:20px;margin:6px 0"><b>${score}</b> / ${DAILY_COUNT} 問正解　🔥 ${currentStreak()}日連続</p>
+    <p style="font-size:20px;margin:6px 0"><b>${score}</b> / ${DAILY_COUNT} 問正解　🔥 ${currentStreak(mode)}日連続</p>
     ${duel ? `<h3>ゴーストとの勝負</h3><table><tr><th>相手</th><th>正解数</th><th>あなたから見て</th></tr>${duel}</table><p class="muted">同じ問題で、正解した人のうち早く押した方の勝ち。</p>` : `<p class="muted">今日のゴーストはまだいません。あなたの記録が、次に遊ぶ人のゴーストになります。</p>`}
     <h3>結果をシェア</h3>
     <pre class="share-text">${esc(text)}</pre>
@@ -725,12 +737,15 @@ function bindDailyShare() {
 // ---------- 画面: ホーム ----------
 function renderHome() {
   stopAll();
-  const done = dailyDone(), today = daily.days[todayKey()];
+  const dailyRow = (mode) => {
+    const done = dailyDone(mode), today = dailyState(mode).days[todayKey()], st = currentStreak(mode);
+    return `<div class="row daily-row"><button id="daily-${mode}">${done ? "もう一度（練習）" : "挑戦する"}</button>${done ? `<span>今日：<b>${today.score}</b> / ${DAILY_COUNT}</span>` : ""}${st ? `<span>🔥${st}日連続</span>` : ""}</div>`;
+  };
   app.innerHTML = `
   <div class="card daily-card">
     <h2>今日の10問 <span class="muted">${todayKey().slice(5).replace("-", "/")}</span></h2>
-    <p class="muted">全員共通の10問。ほかの人の記録（ゴースト）と早押しで勝負できます。${currentStreak() ? `🔥 ${currentStreak()}日連続` : ""}</p>
-    <div class="row"><button id="daily">${done ? "もう一度（練習）" : "挑戦する"}</button>${done ? `<span>今日の記録：<b>${today.score}</b> / ${DAILY_COUNT}</span>` : ""}</div>
+    <p class="muted">全員共通の10問。ほかの人の記録（ゴースト）と早押しで勝負できます。</p>
+    ${dailyRow(EDITION)}
   </div>
   <div class="card">
     <h2>名前</h2>
@@ -748,10 +763,10 @@ function renderHome() {
     <p class="muted">早押しはクリックかスペースキー。答えはひらがな4択（1〜4キーでも選べます）か、音声入力。</p>
   </div>
   <div class="card"><div class="row"><button class="sub" id="stats">自分の成績・問題ごとの記録を見る</button><button class="sub" id="submit-q">問題を投稿する</button></div></div>
-  <p class="muted" style="text-align:center"><a href="privacy.html">プライバシーポリシー</a></p>`;
+  <p class="muted" style="text-align:center"><a href="${BASE}privacy.html">プライバシーポリシー</a></p>`;
   $("#save-name").onclick = () => { profile.name = $("#name").value.trim() || profile.name; saveProfile(); };
   $("#solo").onclick = () => { client.daily = null; createRoom(false); };
-  $("#daily").onclick = startDaily;
+  $(`#daily-${EDITION}`).onclick = () => startDaily(EDITION);
   $("#create").onclick = () => { client.daily = null; createRoom(true); };
   $("#join").onclick = () => joinRoom($("#code").value.trim());
   $("#stats").onclick = renderStats;
@@ -815,7 +830,7 @@ function createRoom(online) {
     if (client.daily) { // 今日の10問：方式1・10問・ふつうの速さで固定。答え方と読み上げはふだんの設定のまま
       const s = defaultSettings();
       client.host.settings = { ...s, mode: 1, count: DAILY_COUNT, charMs: 120 };
-      client.host.daily = client.daily.key;
+      client.host.daily = client.daily;
       client.host.start();
     }
   }, (err) => { alert(err); leaveRoom(); });
@@ -878,7 +893,7 @@ function renderLobby() {
         <option value="choice" ${s.input === "choice" ? "selected" : ""}>ひらがな4択</option>
         <option value="voice" ${s.input === "voice" ? "selected" : ""} ${s.mode === 2 ? "disabled" : ""}>音声入力${s.mode === 2 ? "（方式2では使えません）" : ""}</option>
       </select></label>
-    <label>ジャンル <select id="s-genre" ${dis}>${Object.entries(GENRE_FILTERS).map(([k, [l]]) => `<option value="${k}" ${(s.genre || "all") === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+    <label ${EDITION === "pokemon" ? 'style="display:none"' : ""}>ジャンル <select id="s-genre" ${dis}>${Object.entries(GENRE_FILTERS).map(([k, [l]]) => `<option value="${k}" ${(s.genre || "all") === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
     <label>問題数 <select id="s-count" ${dis}>${[5, 10, 15, 20].map((v) => `<option ${s.count === v ? "selected" : ""}>${v}</option>`).join("")}</select></label>
     <label>文字の速さ <select id="s-speed" ${dis}>${[[160, "ゆっくり"], [120, "ふつう"], [85, "はやい"]].map(([v, l]) => `<option value="${v}" ${s.charMs === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
     <label><input type="checkbox" id="s-tts" ${s.tts ? "checked" : ""} ${dis}> 問題文を音声で読み上げる</label>
@@ -893,7 +908,8 @@ function renderLobby() {
     const mode = Number($("#s-mode").value);
     let input = $("#s-input").value;
     if (mode === 2) input = "choice"; // 方式2は同時に複数人が答えるため音声入力は不可
-    const ns = { mode, input, pct: Number($("#s-pct").value), count: Number($("#s-count").value), charMs: Number($("#s-speed").value), tts: $("#s-tts").checked, genre: $("#s-genre").value };
+    const ns = { mode, input, pct: Number($("#s-pct").value), count: Number($("#s-count").value), charMs: Number($("#s-speed").value), tts: $("#s-tts").checked, genre: EDITION === "pokemon" ? "pokemon" : $("#s-genre").value };
+    if (EDITION === "pokemon") { LS.set("ehq.settings", { ...ns, genre: LS.get("ehq.settings", {}).genre || "all" }); client.host.setSettings(ns); return; }
     LS.set("ehq.settings", ns);
     client.host.setSettings(ns);
   };
