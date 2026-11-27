@@ -156,11 +156,93 @@ function norm(s) {
 function acceptSet(q) {
   return new Set([q.answer, q.reading, ...(q.accept || [])].map(norm));
 }
+// ----- 音声・文字入力の正誤判定 -----
+// 方針（本人の要望）: 表記ゆれで正解を×にしないことを優先する。多少甘くて誤って○になるのは許容。
+// 1) 表記の正規化（カタカナ/ひらがな・ヴ/バ行・ぢ/じ・づ/ず・長音・大文字小文字）
+// 2) 「料理」「県」「川」などの分類語は、付いていても付いていなくても○（トルコ料理 ← トルコ）
+// 3) 漢字とかなの混ぜ書きは○（長谷川町子 ← 長谷川まちこ）
+// 4) かなで答えたときの1文字違い（読みが5文字以上）、2文字違い（9文字以上）は○
+const isKana = (s) => /^[ぁ-ゖ]+$/.test(s);
+function loose(s) {
+  return norm(s).toLowerCase()
+    .replace(/ゔぁ/g, "ば").replace(/ゔぃ/g, "び").replace(/ゔぇ/g, "べ").replace(/ゔぉ/g, "ぼ").replace(/ゔ/g, "ぶ")
+    .replace(/ぢ/g, "じ").replace(/づ/g, "ず").replace(/ー/g, "");
+}
+// 分類語 [表記, 読み…]。答えがこの表記で終わるときだけ、表記と読みの両方から外した形も正解にする（トルコ料理 → トルコ）。
+// 「星」「人」「教」は外すと別の答えになる（金星→金、仏教→仏）ので入れない
+const SUFFIX_PAIRS = [
+  ["料理", "りょうり"], ["県", "けん"], ["府", "ふ"], ["都", "と"], ["道", "どう"], ["市", "し"], ["町", "まち", "ちょう"], ["村", "むら", "そん"], ["区", "く"],
+  ["川", "がわ", "かわ"], ["山", "さん", "やま", "ざん"], ["島", "しま", "じま", "とう"], ["湖", "こ"], ["駅", "えき"], ["語", "ご"],
+  ["座", "ざ"], ["寺", "じ", "でら", "てら"], ["神社", "じんじゃ"], ["城", "じょう"], ["城郭", "じょうかく"], ["博士", "はかせ"], ["先生", "せんせい"],
+  ["さん", "さん"], ["くん", "くん"], ["ちゃん", "ちゃん"], ["様", "さま"], ["大王", "だいおう"], ["警部", "けいぶ"], ["天皇", "てんのう"], ["運河", "うんが"], ["海峡", "かいきょう"],
+  ["砂漠", "さばく"], ["山脈", "さんみゃく"], ["諸島", "しょとう"], ["大陸", "たいりく"], ["海", "かい", "うみ"], ["半島", "はんとう"], ["の滝", "のたき"], ["滝", "たき"],
+  ["祭り", "まつり"], ["祭", "まつり", "さい"], ["公園", "こうえん"], ["条約", "じょうやく"], ["事件", "じけん"], ["の戦い", "のたたかい"], ["の乱", "のらん"],
+  ["時代", "じだい"], ["幕府", "ばくふ"], ["星団", "せいだん"], ["星雲", "せいうん"],
+].map((xs) => xs.map(loose)).sort((a, b) => b[0].length - a[0].length);
+// 外しても別の答えになりにくい語（これ以外で外した形は、ほかの問題の答えと同じなら正解にしない）
+const SAFE_SUFFIXES = new Set(["料理", "県", "府", "都", "語", "さん", "くん", "ちゃん", "様", "先生", "博士"].map(loose));
+// 入力側から外すのは SAFE_SUFFIXES だけ（「東京都」→「東京」など）
+// かな1文字の読み（と・ふ・ご）は外すと別の言葉になりやすいので除く（まひと→まひ）
+const INPUT_SUFFIXES = SUFFIX_PAIRS.filter(([k]) => SAFE_SUFFIXES.has(k)).flat().filter((x) => !(x.length === 1 && isKana(x))).sort((a, b) => b.length - a.length);
+// 全問題の答え・読み・別解（ほかの問題の答えを甘い判定で正解にしないために使う）
+const KNOWN_ANSWERS = new Set(window.QUESTIONS.flatMap((q) => [q.answer, q.reading, ...(q.accept || [])].map(loose)));
+// 答えの表記と読みから、分類語を外した [表記, 読み, 安全か] の組を作る
+function answerPairs(q) {
+  const rd = loose(q.reading), out = [];
+  for (const f of [q.answer, ...(q.accept || [])].map(loose)) {
+    out.push([f, rd, true]);
+    for (const [k, ...rs] of SUFFIX_PAIRS) {
+      if (!f.endsWith(k) || f.length - k.length < 1) continue;
+      const rr = rs.find((r) => rd.endsWith(r) && rd.length - r.length >= 2);
+      if (rr) out.push([f.slice(0, -k.length), rd.slice(0, -rr.length), SAFE_SUFFIXES.has(k)]);
+    }
+  }
+  return out;
+}
+function inputVariants(s) {
+  const v = new Set([s, s.replace(/です$/, ""), s.replace(/^(こたえは|えーと|えっと)/, "")]);
+  for (const x of [...v]) for (const suf of INPUT_SUFFIXES) if (x.length - suf.length >= 2 && x.endsWith(suf)) v.add(x.slice(0, -suf.length));
+  return [...v].filter(Boolean);
+}
+function editDistance(a, b) {
+  const d = Array.from({ length: a.length + 1 }, (_, i) => [i]);
+  for (let j = 1; j <= b.length; j++) d[0][j] = j;
+  for (let i = 1; i <= a.length; i++) for (let j = 1; j <= b.length; j++)
+    d[i][j] = Math.min(d[i - 1][j] + 1, d[i][j - 1] + 1, d[i - 1][j - 1] + (a[i - 1] === b[j - 1] ? 0 : 1));
+  return d[a.length][b.length];
+}
+// 漢字とかなの混ぜ書き: 漢字部分は答えの表記に、かな部分は読みに、順番どおり含まれていればよい
+function mixedMatch(inp, ans, rd) {
+  const segs = inp.match(/[ぁ-ゖ]+|[^ぁ-ゖ]+/g) || [];
+  if (segs.length < 2 || !segs.some(isKana) || segs.every(isKana)) return false;
+  let pa = 0, pr = 0, covered = 0;
+  for (let i = 0; i < segs.length; i++) {
+    const g = segs[i], kana = isKana(g), src = kana ? rd : ans, from = kana ? pr : pa;
+    const at = src.indexOf(g, from);
+    if (at < 0 || (i === 0 && at !== 0)) return false;
+    if (i === segs.length - 1 && at + g.length !== src.length) return false;
+    if (kana) pr = at + g.length; else pa = at + g.length;
+    covered += g.length;
+  }
+  return covered >= rd.length * 0.6;
+}
 function judgeText(q, text) {
-  const n = norm(text);
-  if (!n) return false;
-  const set = acceptSet(q);
-  return set.has(n) || set.has(n.replace(/です$/, ""));
+  const raw = loose(text);
+  if (!raw) return false;
+  const inputs = inputVariants(raw), pairs = answerPairs(q);
+  // 完全一致（分類語を外した形どうしも含む）
+  const exact = (i) => pairs.some(([f, r, safe]) => (i === f || i === r) && (safe || !KNOWN_ANSWERS.has(i)));
+  if (inputs.some(exact)) return true;
+  // ここから下の甘い判定は、入力がほかの問題の答えそのものなら使わない（岡山県→和歌山県 などを防ぐ）
+  const free = inputs.filter((i) => !KNOWN_ANSWERS.has(i));
+  // 漢字とかなの混ぜ書き
+  for (const i of free) for (const [f, r] of pairs) if (mixedMatch(i, f, r)) return true;
+  // かなの打ち間違い・聞き取り違い
+  for (const i of free) if (isKana(i)) for (const [, r] of pairs) {
+    const lim = r.length >= 9 ? 2 : r.length >= 5 ? 1 : 0;
+    if (lim && Math.abs(i.length - r.length) <= lim && editDistance(i, r) <= lim) return true;
+  }
+  return false;
 }
 const KANA_ROWS = ["あいうえお", "かきくけこ", "さしすせそ", "たちつてと", "なにぬねの", "はひふへほ", "まみむめも", "やゆよ", "らりるれろ", "わをん", "がぎぐげご", "ざじずぜぞ", "だぢづでど", "ばびぶべぼ", "ぱぴぷぺぽ"];
 const SMALL_PAIRS = { "ぁ": "あ", "ぃ": "い", "ぅ": "う", "ぇ": "え", "ぉ": "お", "ゃ": "や", "ゅ": "ゆ", "ょ": "よ", "っ": "つ" };
