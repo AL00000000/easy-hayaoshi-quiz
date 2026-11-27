@@ -577,7 +577,8 @@ function renderHome() {
     </div>
     <p class="muted">早押しはクリックかスペースキー。答えはひらがな4択（1〜4キーでも選べます）か、音声入力。</p>
   </div>
-  <div class="card"><div class="row"><button class="sub" id="stats">自分の成績・問題ごとの記録を見る</button><button class="sub" id="submit-q">問題を投稿する</button></div></div>`;
+  <div class="card"><div class="row"><button class="sub" id="stats">自分の成績・問題ごとの記録を見る</button><button class="sub" id="submit-q">問題を投稿する</button></div></div>
+  <p class="muted" style="text-align:center"><a href="privacy.html">プライバシーポリシー</a></p>`;
   $("#save-name").onclick = () => { profile.name = $("#name").value.trim() || profile.name; saveProfile(); };
   $("#solo").onclick = () => createRoom(false);
   $("#create").onclick = () => createRoom(true);

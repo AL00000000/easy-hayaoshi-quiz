@@ -5,6 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>簡単早押しクイズ</title>
 <link rel="stylesheet" href="style.css">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#263a5c">
+<meta name="description" content="問題文が1文字ずつ流れる早押しクイズ。ひとりで練習も、部屋番号で友だちと対戦もできます。">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
 </head>
 <body>
 <header>
@@ -17,5 +22,6 @@
 <script src="questions2.js"></script>
 <script src="questions3.js"></script>
 <script src="app.js"></script>
+<script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("sw.js");</script>
 </body>
 </html>

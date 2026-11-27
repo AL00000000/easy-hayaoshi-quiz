@@ -50,3 +50,12 @@ th, td { border-bottom: 1px solid #ddd; padding: 6px; text-align: left; vertical
 /* ブーイングの理由 */
 .boo-form { background: #f6f0fa; border-radius: 8px; padding: 8px 10px; margin-bottom: 6px; }
 .boo-reasons { display: flex; flex-wrap: wrap; gap: 4px 14px; margin: 6px 0; font-size: 14px; }
+/* スマホ幅でははみ出さないように */
+select, input, textarea { max-width: 100%; box-sizing: border-box; }
+.card { overflow-x: auto; }
+@media (max-width: 480px) {
+  header { padding: 8px 12px; }
+  header h1 { font-size: 16px; }
+  main { padding: 10px; }
+  .card { padding: 14px 12px; }
+}
