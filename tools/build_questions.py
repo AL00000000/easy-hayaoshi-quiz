@@ -43,10 +43,33 @@ def existing_questions():
     return out
 
 
+def changed_dates(path):
+    """各行を最後に変えた日（git blame）。まだコミットしていない行は今日。隠しコマンドの「新問モード」で使う"""
+    import subprocess, datetime
+    jst = datetime.timezone(datetime.timedelta(hours=9))
+    today = datetime.datetime.now(jst).strftime("%Y-%m-%d")
+    try:
+        out = subprocess.run(["git", "blame", "--line-porcelain", os.path.basename(path)], cwd=os.path.dirname(path),
+                             capture_output=True, text=True, encoding="utf-8", check=True).stdout
+    except Exception:
+        return {}
+    dates, cur, uncommitted, t = {}, None, False, None
+    for line in out.splitlines():
+        m = re.match(r"^([0-9a-f]{40}) \d+ (\d+)", line)
+        if m:
+            cur, uncommitted = int(m.group(2)), m.group(1) == "0" * 40
+        elif line.startswith("author-time "):
+            t = int(line.split()[1])
+        elif line.startswith("	") and cur:
+            dates[cur] = today if uncommitted else datetime.datetime.fromtimestamp(t, jst).strftime("%Y-%m-%d")
+    return dates
+
+
 def main():
     rows, problems = [], []
     for path in sorted(glob.glob(os.path.join(ROOT, "data", "*.txt"))):
         base = os.path.splitext(os.path.basename(path))[0]
+        dates = changed_dates(path)
         n = 0
         for ln, line in enumerate(open(path, encoding="utf-8"), 1):
             line = line.strip()
@@ -84,6 +107,8 @@ def main():
                     q["weight"] = float(weight)
                 except ValueError:
                     problems.append(f"{base}:{ln} 出やすさが数字でない: {weight}")
+            if dates.get(ln):
+                q["added"] = dates[ln]  # この行を最後に変えた日（新問モード用）
             q["_where"] = f"{base}:{ln}"
             rows.append(q)
 

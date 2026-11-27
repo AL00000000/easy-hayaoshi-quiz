@@ -396,7 +396,7 @@ class Host {
     this.startPlayers = this.players.map((p) => ({ ...p }));
     const avg = this.players.reduce((a, p) => a + p.rating, 0) / this.players.length;
     this.roomRank = rankOf(avg);
-    this.qlist = this.daily ? dailyQuestions(this.daily.key, this.daily.mode) : pickQuestions(s.count, this.roomRank, s.genre);
+    this.qlist = this.daily ? dailyQuestions(this.daily.key, this.daily.mode) : !this.online && newModeDays() ? pickNewQuestions(s.count, s.genre) : pickQuestions(s.count, this.roomRank, s.genre);
     this.scores = Object.fromEntries(this.players.map((p) => [p.id, 0]));
     this.log = [];
     this.gameId = rid();
@@ -496,6 +496,36 @@ function defaultSettings() {
 // 正答率の低い問題ほど高ランクの部屋で多く出す
 // ジャンルの絞り込み（"all" ならすべて）
 const GENRE_FILTERS = { all: ["すべて", () => true], pokemon: ["ポケモンだけ", (q) => q.genre === "ポケモン" || /ポケモン|ポケットモンスター/.test(q.text)], stock: ["株式だけ", (q) => q.genre === "株式"] };
+// ----- 新問モード（隠しコマンド。問題を足した・直したときの確認用）-----
+// Alt+N（スマホはヘッダーの名前の欄を5回続けてタップ）で 切 → 直近1日 → 直近3日 → 直近7日 → 切 と切り替わる。
+// オンのとき、ひとり練習では最近足した・直した問題（q.added）だけを新しい順に出す。部屋と今日の10問には効かない
+const NEW_MODE_STEPS = [0, 1, 3, 7];
+const newModeDays = () => Number(LS.get("ehq.newmode", 0)) || 0;
+function cycleNewMode() {
+  const i = NEW_MODE_STEPS.indexOf(newModeDays());
+  const d = NEW_MODE_STEPS[(i + 1) % NEW_MODE_STEPS.length];
+  LS.set("ehq.newmode", d);
+  if (!client.game || client.game.over) renderHome();
+  alert(d ? `新問モード：オン（直近${d}日に足した・直した問題だけ。ひとり練習のみ）` : "新問モード：オフ");
+}
+function newPool(genre = "all") {
+  const since = todayKey(-(newModeDays() - 1));
+  return window.QUESTIONS.filter((GENRE_FILTERS[genre] || GENRE_FILTERS.all)[1]).filter((q) => q.added && q.added >= since);
+}
+function pickNewQuestions(count, genre) {
+  const pool = newPool(genre);
+  if (!pool.length) return pickQuestions(count, rankOf(profile.rating), genre);
+  return shuffle(pool).sort((a, b) => (a.added < b.added ? 1 : a.added > b.added ? -1 : 0)).slice(0, count);
+}
+document.addEventListener("keydown", (e) => { if (e.altKey && !e.ctrlKey && !e.shiftKey && e.code === "KeyN") { e.preventDefault(); cycleNewMode(); } });
+let newModeTaps = [];
+document.addEventListener("click", (e) => {
+  if (!e.target.closest || !e.target.closest("#me-box")) return;
+  const now = Date.now();
+  newModeTaps = newModeTaps.filter((t) => now - t < 2500).concat(now);
+  if (newModeTaps.length >= 5) { newModeTaps = []; cycleNewMode(); }
+});
+
 function pickQuestions(count, rank, genre = "all") {
   const target = RANK_TARGET[rank];
   const pool = window.QUESTIONS.filter((GENRE_FILTERS[genre] || GENRE_FILTERS.all)[1]);
@@ -785,7 +815,8 @@ function renderHome() {
     const done = dailyDone(mode), today = dailyState(mode).days[todayKey()], st = currentStreak(mode);
     return `<div class="row daily-row"><button id="daily-${mode}">${done ? "もう一度（練習）" : "挑戦する"}</button>${done ? `<span>今日：<b>${today.score}</b> / ${DAILY_COUNT}</span>` : ""}${st ? `<span>🔥${st}日連続</span>` : ""}</div>`;
   };
-  app.innerHTML = `
+  const nm = newModeDays();
+  app.innerHTML = `${nm ? `<div class="card" style="border:2px dashed #e67e22"><b>🧪 新問モード</b>（直近${nm}日に足した・直した問題 ${newPool(EDITION).length}問。ひとり練習だけ。Alt+N で切り替え）</div>` : ""}
   <div class="card daily-card">
     <h2>今日の10問 <span class="muted">${todayKey().slice(5).replace("-", "/")}</span></h2>
     <p class="muted">全員共通の10問。ほかの人の記録（ゴースト）と早押しで勝負できます。</p>
