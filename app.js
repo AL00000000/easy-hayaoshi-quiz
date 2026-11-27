@@ -488,7 +488,7 @@ class Host {
 
 const nameOfPlayer = (players, pid) => (players.find((p) => p.id === pid) || {}).name || "？";
 function defaultSettings() {
-  const s = Object.assign({ mode: 1, input: "choice", pct: 50, count: 10, tts: true, charMs: 120, genre: "all", pstats: "mix" }, LS.get("ehq.settings", {}));
+  const s = Object.assign({ mode: 1, input: "choice", pct: 50, count: 10, tts: true, charMs: 120, genre: "all", pstats: "off" }, LS.get("ehq.settings", {}));
   if (s.pstats === true) s.pstats = "mix"; else if (s.pstats === false) s.pstats = "off";
   if (EDITION !== "all") s.genre = EDITION; // ポケモン版・株式版は常にそのジャンルだけ
   return s;
@@ -498,7 +498,7 @@ function defaultSettings() {
 // ジャンルの絞り込み（"all" ならすべて）
 const GENRE_FILTERS = { all: ["すべて", () => true], pokemon: ["ポケモンだけ", (q) => q.genre === "ポケモン" || /ポケモン|ポケットモンスター/.test(q.text)], stock: ["株式だけ", (q) => q.genre === "株式"] };
 // 種族値の問題（ポケモン版の細かいジャンル「種族値」）は、ポケモンだけを出すときに設定で選ぶ（本人の要望・2026-11-28）。
-//   off＝出さない／mix＝まぜる（数が多いので、出題の約3割になるように重みを下げる）／only＝種族値だけ
+//   off＝出さない（既定。本人の指定）／mix＝まぜる（数が多いので、出題の約3割になるように重みを下げる）／only＝種族値だけ
 // 全体版の「すべて」と今日の10問には出さない（全員が同じ問題を解く今日の10問を、設定で変えないため）
 const isStatQ = (q) => q.sub === "種族値";
 const STATS_MODES = [["off", "出さない"], ["mix", "まぜる（約3割）"], ["only", "種族値だけ"]];
@@ -1042,7 +1042,7 @@ function renderLobby() {
         <option value="voice" ${s.input === "voice" ? "selected" : ""} ${s.mode === 2 ? "disabled" : ""}>音声入力${s.mode === 2 ? "（方式2では使えません）" : ""}</option>
       </select></label>
     <label ${EDITION !== "all" ? 'style="display:none"' : ""}>ジャンル <select id="s-genre" ${dis}>${Object.entries(GENRE_FILTERS).map(([k, [l]]) => `<option value="${k}" ${(s.genre || "all") === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
-    <label id="pstats-row" ${EDITION === "pokemon" || (EDITION === "all" && s.genre === "pokemon") ? "" : 'style="display:none"'}>種族値の問題（合計とHABCDSから答える） <select id="s-pstats" ${dis}>${STATS_MODES.map(([v, l]) => `<option value="${v}" ${(s.pstats || "mix") === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+    <label id="pstats-row" ${EDITION === "pokemon" || (EDITION === "all" && s.genre === "pokemon") ? "" : 'style="display:none"'}>種族値の問題（合計とHABCDSから答える） <select id="s-pstats" ${dis}>${STATS_MODES.map(([v, l]) => `<option value="${v}" ${(s.pstats || "off") === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
     <label>問題数 <select id="s-count" ${dis}>${[5, 10, 15, 20].map((v) => `<option ${s.count === v ? "selected" : ""}>${v}</option>`).join("")}</select></label>
     <label>文字の速さ <select id="s-speed" ${dis}>${[[160, "ゆっくり"], [120, "ふつう"], [85, "はやい"]].map(([v, l]) => `<option value="${v}" ${s.charMs === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
     <label><input type="checkbox" id="s-tts" ${s.tts ? "checked" : ""} ${dis}> 問題文を音声で読み上げる</label>
