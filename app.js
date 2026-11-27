@@ -413,7 +413,7 @@ class Host {
     this.cur = { q, buzzes: [], rights: [], results: {}, closed: false, slots, timeUp: false };
     const delay = 1200;
     this.broadcast({ t: "q", i: this.qi, total: this.qlist.length, q, delay, slots });
-    const dur = delay + [...q.text].length * this.settings.charMs + 5000;
+    const dur = delay + (isStatShow(q) ? 7 * statStepMs(this.settings.charMs) : [...q.text].length * this.settings.charMs) + 5000;
     this.cur.endTimer = this.later(() => this.onTimeUp(), dur);
   }
   onBuzz(pid, elapsed, charIdx) {
@@ -439,7 +439,7 @@ class Host {
   onAnswer(pid, ok, text) {
     const c = this.cur;
     if (!c || c.closed || !c.rights.includes(pid) || c.results[pid]) return;
-    const b = c.buzzes.find((x) => x.pid === pid), len = [...c.q.text].length;
+    const b = c.buzzes.find((x) => x.pid === pid), len = qUnits(c.q).length;
     c.results[pid] = { ok, text, pos: b && len ? Math.min(1, Number(b.charIdx) / len) : null };
     this.broadcast({ t: "answered", pid, ok, text });
     const allAnswered = c.rights.every((p) => c.results[p]);
@@ -503,6 +503,14 @@ const GENRE_FILTERS = { all: ["すべて", () => true], pokemon: ["ポケモン�
 const isStatQ = (q) => q.sub === "種族値";
 const STATS_MODES = [["off", "出さない"], ["mix", "まぜる（約3割）"], ["only", "種族値だけ"]];
 const STATS_MIX_SHARE = 0.3;
+// 種族値の問題の出し方（本人の要望・2026-11-28）：六角形のグラフの上に合計を出し、H・A・B・C・D・S を1つずつ足していく。
+// 文字の代わりに「情報1つ」を1段階として流す（合計＋6つで7段階）。押した位置の記録も7段階のどこで押したかになる
+const STAT_KEYS = ["H", "A", "B", "C", "D", "S"];
+const STAT_SAY = ["エイチ", "エー", "ビー", "シー", "ディー", "エス"];
+const isStatShow = (q) => isStatQ(q) && Array.isArray(q.bs) && q.bs.length === 6;
+const statStepMs = (charMs) => charMs * 12; // ふつう（120ms）で1.44秒ごと
+const statSteps = (q) => [`合計種族値${q.bs.reduce((a, b) => a + b, 0)}`, ...q.bs.map((v, i) => STAT_KEYS[i] + v)];
+const qUnits = (q) => (isStatShow(q) ? statSteps(q) : [...q.text]);
 // 2026-11-28 に足したポケモンの問題（08_pokemon の113問目以降）は、その日の今日の10問を途中で変えないように 11/29 から入れる
 const addedLater = (q, key) => key < "2026-11-29" && /^08_pokemon-(\d+)$/.test(q.id) && Number(q.id.slice(11)) > 112;
 function genrePool(genre = "all", stats = "off") {
@@ -1099,7 +1107,7 @@ const nameOf = (pid) => { const p = (client.game?.players || client.players).fin
 function onQuestion(m) {
   const g = client.game;
   stopAll();
-  g.cur = { q: m.q, chars: [...m.q.text], shown: 0, t0: null, pausedMs: 0, myState: "wait", token: rid(), slots: m.slots };
+  g.cur = { q: m.q, chars: qUnits(m.q), shown: 0, t0: null, pausedMs: 0, myState: "wait", token: rid(), slots: m.slots };
   Sound.start();
   g.qs.push(m.q);
   $("#qno").textContent = `第${m.i + 1}問 / ${m.total}${m.q.sub ? `（${m.q.sub}）` : ""}`;
@@ -1115,7 +1123,7 @@ function onQuestion(m) {
     g.cur.myState = "listen";
     setStatus("");
     updateBuzz();
-    speak(m.q, g.settings.tts);
+    if (!isStatShow(m.q)) speak(m.q, g.settings.tts); // 種族値の問題は1段階ずつ読み上げる（streamTick）
     streamTick(tok);
   }, m.delay);
 }
@@ -1125,7 +1133,14 @@ function streamTick(tok) {
   c.shown++;
   drawText();
   checkGhosts();
-  if (c.shown < c.chars.length) c.streamTimer = new PTimer(client.timers, () => streamTick(tok), client.game.settings.charMs);
+  const stat = isStatShow(c.q);
+  if (stat) {
+    // 1つ出すごとに短い音を鳴らし、その情報だけを読み上げる
+    Sound.tone(c.shown === 1 ? 660 : 880, 0, 0.09, { type: "square", vol: 0.06 });
+    const i = c.shown - 1, say = i === 0 ? c.chars[0] : STAT_SAY[i - 1] + c.q.bs[i - 1];
+    speak({ text: say, tts: say + (c.shown === c.chars.length ? "。このポケモンは何でしょう？" : "") }, client.game.settings.tts);
+  }
+  if (c.shown < c.chars.length) c.streamTimer = new PTimer(client.timers, () => streamTick(tok), stat ? statStepMs(client.game.settings.charMs) : client.game.settings.charMs);
 }
 function pauseStream() {
   const c = client.game?.cur;
@@ -1137,9 +1152,36 @@ function pauseStream() {
 function drawText(all) {
   const c = client.game.cur, el = $("#qtext");
   if (!el) return;
+  if (isStatShow(c.q)) { el.innerHTML = statChart(c.q.bs, c.shown, all); return; }
   const n = all ? c.chars.length : c.shown;
   el.innerHTML = esc(c.chars.slice(0, n).join(""));
   if (all && c.shown < c.chars.length) el.innerHTML = esc(c.chars.slice(0, c.shown).join("")) + `<span class="rest">${esc(c.chars.slice(c.shown).join(""))}</span>`;
+}
+// 種族値の六角形のグラフ。shown＝出した段階の数（1で合計、2〜7でH〜S）。all＝正解発表（まだ出していない値は薄く出す）
+// 並びはゲームの画面と同じ：上がH、右上A、右下B、下S、左下D、左上C
+function statChart(bs, shown, all) {
+  const W = 320, H = 300, cx = 160, cy = 170, R = 92, MAX = 200;
+  const ang = { H: -90, A: -30, B: 30, S: 90, D: 150, C: 210 };
+  const pt = (k, r) => { const a = (ang[k] * Math.PI) / 180; return [cx + r * Math.cos(a), cy + r * Math.sin(a)]; };
+  const vis = (i) => shown >= i + 2; // i番目（H=0）を出したか
+  const grid = [1, 2 / 3, 1 / 3].map((f) => `<polygon points="${STAT_KEYS.map((k) => pt(k, R * f).join(",")).join(" ")}" fill="none" stroke="#ccc" stroke-width="${f === 1 ? 1.5 : 1}" ${f === 1 ? "" : 'stroke-dasharray="3 3"'}/>`).join("");
+  const axes = STAT_KEYS.map((k) => `<line x1="${cx}" y1="${cy}" x2="${pt(k, R)[0]}" y2="${pt(k, R)[1]}" stroke="#ddd"/>`).join("");
+  const poly = (useAll) => STAT_KEYS.map((k, i) => pt(k, (useAll || vis(i) ? Math.min(bs[i], MAX * 1.2) / MAX : 0) * R).join(",")).join(" ");
+  const full = all && shown < 7 ? `<polygon points="${poly(true)}" fill="rgba(150,150,150,.15)" stroke="#bbb" stroke-dasharray="4 3"/>` : "";
+  const shape = shown >= 2 ? `<polygon points="${poly(false)}" fill="rgba(230,126,34,.35)" stroke="#e67e22" stroke-width="2"/>` : "";
+  const dots = STAT_KEYS.map((k, i) => (vis(i) ? `<circle cx="${pt(k, Math.min(bs[i], MAX * 1.2) / MAX * R)[0]}" cy="${pt(k, Math.min(bs[i], MAX * 1.2) / MAX * R)[1]}" r="3.5" fill="#e67e22"/>` : "")).join("");
+  const labels = STAT_KEYS.map((k, i) => {
+    const [x, y] = pt(k, R + 30), seen = vis(i), latest = shown === i + 2 && !all;
+    const val = seen || all ? bs[i] : "？";
+    const col = seen ? (latest ? "#e67e22" : "currentColor") : "#bbb";
+    return `<text x="${x}" y="${y}" text-anchor="middle" dominant-baseline="middle" fill="${col}" font-weight="bold" font-size="${latest ? 22 : 18}">${k} ${val}</text>`;
+  }).join("");
+  const total = shown >= 1 || all ? bs.reduce((a, b) => a + b, 0) : "？";
+  const totalCol = shown >= 1 ? (shown === 1 && !all ? "#e67e22" : "currentColor") : "#bbb";
+  return `<div class="stat-q"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="種族値のグラフ" style="width:100%;max-width:360px;display:block;margin:0 auto">
+    <text x="${cx}" y="22" text-anchor="middle" font-size="22" font-weight="bold" fill="${totalCol}">合計種族値 ${total}</text>
+    ${grid}${axes}${full}${shape}${dots}${labels}</svg>
+    <div style="text-align:center;font-size:18px">${shown >= 7 || all ? "このポケモンは何でしょう？" : '<span class="muted">このポケモンは何でしょう？</span>'}</div></div>`;
 }
 function updateBuzz() {
   const b = $("#buzz"), c = client.game?.cur;

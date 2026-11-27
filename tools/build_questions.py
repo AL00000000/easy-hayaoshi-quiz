@@ -105,6 +105,16 @@ def main():
                 if tts:
                     problems.append(f"{base}:{ln} 問題文が複数あるときは読み上げ用文を書けない")
                 q["variants"] = [{"text": x, **({"tts": tts_for(x)} if tts_for(x) else {})} for x in texts]
+            if sub == "種族値":
+                # 六角形のグラフで1つずつ出すための数値（H・A・B・C・D・S）。問題文から読み、合計と合うかを確かめる
+                m = re.match(r"合計種族値(\d+)、H(\d+)・A(\d+)・B(\d+)・C(\d+)・D(\d+)・S(\d+)の", text)
+                if not m:
+                    problems.append(f"{base}:{ln} 種族値の問題文の形が違う: {text[:30]}")
+                else:
+                    nums = [int(x) for x in m.groups()]
+                    q["bs"] = nums[1:]
+                    if sum(nums[1:]) != nums[0]:
+                        problems.append(f"{base}:{ln} 合計種族値が合わない: {text[:30]}")
             if retry:
                 q["retry"] = [a for a in retry.split(";") if a]
             if not weight and len(texts) > 1:
