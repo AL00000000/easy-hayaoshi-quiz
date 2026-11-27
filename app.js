@@ -300,7 +300,7 @@ class Host {
     const n = this.players.length;
     const slots = this.settings.mode === 1 ? 1 : Math.max(1, Math.ceil((n * this.settings.pct) / 100));
     this.cur = { q, buzzes: [], rights: [], results: {}, closed: false, slots, timeUp: false };
-    const delay = 1500;
+    const delay = 1200;
     this.broadcast({ t: "q", i: this.qi, total: this.qlist.length, q, delay, slots });
     const dur = delay + [...q.text].length * this.settings.charMs + 5000;
     this.cur.endTimer = this.later(() => this.onTimeUp(), dur);
@@ -349,7 +349,7 @@ class Host {
     for (const [pid, r] of Object.entries(c.results)) if (r.ok) this.scores[pid] = (this.scores[pid] || 0) + 1;
     this.log.push({ qid: c.q.id, results: c.results });
     this.broadcast({ t: "reveal", q: c.q, results: c.results, scores: this.scores });
-    this.later(() => this.next(), 4500);
+    this.later(() => this.next(), 2500);
   }
   finish() {
     this.inGame = false;
@@ -880,9 +880,9 @@ function onEnd(m) {
   <div class="card">
     <h2>出た問題</h2>
     <p class="muted">悪い問題だと思ったら ${THUMB_DOWN.replace('width="22" height="22"', 'width="14" height="14"')} を押してください（もう一度押すと取り消し）。</p>
-    <table>${m.log.map((l) => { const q = QMAP[l.qid] || g.qs.find((x) => x.id === l.qid); const r = l.results[profile.id]; return `<tr><td>${esc(q.text)}<br><b>${esc(q.answer)}</b> <span class="muted">あなた：${!r ? "答えず" : r.ok ? "○" : "×"}</span></td><td><button class="boo" data-q="${esc(l.qid)}" title="ブーイング" aria-label="ブーイング" aria-pressed="false">${THUMB_DOWN}</button></td></tr>
+    <table>${m.log.map((l) => { const q = QMAP[l.qid] || g.qs.find((x) => x.id === l.qid); const r = l.results[profile.id]; return `<tr><td>${esc(q.text)}<br><b>${esc(q.answer)}</b> <span class="muted">あなた：${!r ? "答えず" : r.ok ? "○" : "×"}</span></td><td><button class="boo" data-q="${esc(l.qid)}" title="よくない問題" aria-label="よくない問題" aria-pressed="false">${THUMB_DOWN}</button></td></tr>
       <tr class="boo-row" data-q="${esc(l.qid)}" hidden><td colspan="2"><div class="boo-form" data-q="${esc(l.qid)}">
-        <div class="muted">ブーイングの理由（任意・いくつでも）</div>
+        <div class="muted">よくないと思った理由（任意・いくつでも）</div>
         <div class="boo-reasons">${BOO_REASONS.map((x) => `<label><input type="checkbox" value="${esc(x)}"> ${esc(x)}</label>`).join("")}</div>
         <div class="row"><input type="text" class="boo-text" maxlength="200" placeholder="具体的に（例：○○も正解になる）" style="flex:1;min-width:200px"><button class="sub boo-send">理由を送る</button><span class="muted boo-sent"></span></div>
       </div></td></tr>`; }).join("")}</table>
@@ -931,8 +931,8 @@ function renderStats() {
   </div>
   <div class="card">
     <h2>問題ごとの記録（この端末）</h2>
-    <p class="muted">正答率＝正解数 ÷ 答えた人数。ランク別はそのランクで${RANK_MIN_SAMPLES}件以上たまると出題の重み付けに使います。悪問候補＝正解した人から2件以上、かつ正解数の2割以上のブーイング。</p>
-    <table><tr><th>ジャンル</th><th>答え</th><th>答えた</th><th>正答率</th><th>ランク別</th><th>問題レート</th><th>正解時の押し位置</th><th>ブーイング（正解者/不正解者/未解答）</th><th>ブーイングの理由</th></tr>
+    <p class="muted">正答率＝正解数 ÷ 答えた人数。ランク別はそのランクで${RANK_MIN_SAMPLES}件以上たまると出題の重み付けに使います。悪問候補＝正解した人から2件以上、かつ正解数の2割以上の${THUMB_DOWN.replace('width="22" height="22"', 'width="14" height="14"')}。</p>
+    <table><tr><th>ジャンル</th><th>答え</th><th>答えた</th><th>正答率</th><th>ランク別</th><th>問題レート</th><th>正解時の押し位置</th><th>${THUMB_DOWN.replace('width="22" height="22"', 'width="14" height="14"')}（正解者/不正解者/未解答）</th><th>${THUMB_DOWN.replace('width="22" height="22"', 'width="14" height="14"')}の理由</th></tr>
     ${rows.map(({ q, s }) => `<tr><td>${esc(q.genre)}</td><td>${esc(q.answer)}</td><td>${s?.answered || 0}</td><td>${pct(s?.correct, s?.answered)}</td><td>${s ? Object.entries(s.byRank).map(([k, v]) => `${k}:${pct(v.correct, v.answered)}`).join(" ") : ""}</td><td>${s ? Math.round(s.rating) : ""}</td><td>${s?.pos && posAvg(s.pos) != null ? `平均${posAvg(s.pos)}%（${s.pos.reduce((a, b) => a + b, 0)}件）` : ""}</td><td>${s ? `${s.boo.correct}/${s.boo.wrong}/${s.boo.none}` : ""}${isBadCandidate(s) ? ` <b class="result-ng">悪問候補</b>` : ""}</td><td>${s ? `<span title="${esc(reasonTexts(s))}">${esc(reasonCount(s))}${reasonTexts(s) ? " 💬" : ""}</span>` : ""}</td></tr>`).join("")}
     </table>
     <div class="row" style="margin-top:12px"><button class="sub" id="back">戻る</button><button class="sub" id="export">記録をJSONで保存</button></div>
