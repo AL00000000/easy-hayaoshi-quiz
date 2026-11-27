@@ -467,7 +467,7 @@ function joinRoom(code) {
     client.conn = conn;
     conn.on("open", () => conn.send({ t: "join", id: profile.id, name: profile.name, rating: profile.rating }));
     conn.on("data", (m) => client.onMsg(m));
-    conn.on("close", () => { alert("部屋との接続が切れました"); leaveRoom(); });
+    conn.on("close", () => { if (client.conn !== conn) return; alert("部屋との接続が切れました"); leaveRoom(); });
   });
   peer.on("error", (e) => { alert(e.type === "peer-unavailable" ? "その部屋は見つかりませんでした" : "通信エラー: " + e.type); leaveRoom(); });
 }
@@ -479,6 +479,14 @@ function leaveRoom() {
   drawPause();
   renderHome();
 }
+
+// 左上のロゴ: トップページへ戻る（部屋にいるときは確認してから抜ける）
+document.getElementById("logo").addEventListener("click", (e) => {
+  e.preventDefault();
+  const inRoom = client.peer || client.host || client.conn;
+  if (inRoom && !confirm("部屋から抜けてトップページに戻りますか？")) return;
+  leaveRoom();
+});
 
 // ---------- 画面: 部屋（設定） ----------
 function renderLobby() {

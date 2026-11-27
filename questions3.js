@@ -150,7 +150,7 @@ window.QUESTIONS.push(
   {"id": "01_words-148", "genre": "芸能", "text": "BUMP OF CHICKENの「基央」、女優の「紀香」、俳優の「竜也」に共通する名字は何でしょう？", "answer": "藤原", "reading": "ふじわら", "accept": []},
   {"id": "01_words-149", "genre": "芸能", "text": "女優の「瞳」「メイサ」「華」に共通する名字は何でしょう？", "answer": "黒木", "reading": "くろき", "accept": []},
   {"id": "01_words-150", "genre": "芸能", "text": "女優の「栄子」、俳優の「徹平」に共通する名字は何でしょう？", "answer": "小池", "reading": "こいけ", "accept": []},
-  {"id": "01_words-151", "genre": "芸能", "text": "女優の「日奈子」、Mr.Childrenの「和寿」、嵐の「翔」に共通する名字は何でしょう？", "answer": "桜井", "reading": "さくらい", "accept": ["櫻井"]},
+  {"id": "01_words-151", "genre": "芸能", "text": "女優の「日奈子」「幸子」、Mr.Childrenの「和寿」に共通する名字は何でしょう？", "answer": "桜井", "reading": "さくらい", "accept": []},
   {"id": "01_words-152", "genre": "芸能", "text": "柔道の「将平」、嵐の「智」に共通する名字は何でしょう？", "answer": "大野", "reading": "おおの", "accept": []},
   {"id": "01_words-153", "genre": "芸能", "text": "サッカーのゴールキーパー「能活」、女優の「春奈」に共通する名字は何でしょう？", "answer": "川口", "reading": "かわぐち", "accept": []},
   {"id": "01_words-154", "genre": "芸能", "text": "女優の「ひかり」「ゆり子」、俳優の「純一」に共通する名字は何でしょう？", "answer": "石田", "reading": "いしだ", "accept": []},
