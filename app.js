@@ -29,12 +29,20 @@ const Sound = {
     node.connect(g); g.connect(ctx.destination);
     o.start(t); o.stop(t + dur + 0.05);
   },
-  // 出題：「デデン」
+  noise(start, dur, { vol = 0.2, hp = 1000, lp = 12000 } = {}) {
+    const ctx = this.ctx; if (!ctx) return;
+    const t = ctx.currentTime + start, len = Math.ceil(ctx.sampleRate * dur), b = ctx.createBuffer(1, len, ctx.sampleRate), d = b.getChannelData(0);
+    for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+    const s = ctx.createBufferSource(), h = ctx.createBiquadFilter(), l = ctx.createBiquadFilter(), g = ctx.createGain();
+    s.buffer = b; h.type = "highpass"; h.frequency.value = hp; l.type = "lowpass"; l.frequency.value = lp;
+    g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.005); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    s.connect(h); h.connect(l); l.connect(g); g.connect(ctx.destination); s.start(t); s.stop(t + dur);
+  },
+  // 出題：「ジャン！」（和音を一発＋シンバル。se.html の候補3を本人が選択・2026-11-27）
   start() {
-    for (const [f, st, d] of [[196, 0, 0.16], [131, 0.2, 0.7]]) {
-      this.tone(f, st, d, { type: "sawtooth", vol: 0.22, filter: 1400 });
-      this.tone(f / 2, st, d, { type: "square", vol: 0.12, filter: 600 });
-    }
+    for (const f of [261.6, 329.6, 392, 523.3]) this.tone(f, 0, 0.8, { type: "sawtooth", vol: 0.09, filter: 3000 });
+    this.tone(130.8, 0, 0.8, { type: "square", vol: 0.12, filter: 800 });
+    this.noise(0, 0.9, { vol: 0.12, hp: 5000 });
   },
   // 早押し：「ピロリローン」
   buzz() {
