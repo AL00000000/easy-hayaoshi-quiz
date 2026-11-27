@@ -487,12 +487,61 @@ function renderHome() {
     </div>
     <p class="muted">早押しはクリックかスペースキー。答えはひらがな4択（1〜4キーでも選べます）か、音声入力。</p>
   </div>
-  <div class="card"><button class="sub" id="stats">自分の成績・問題ごとの記録を見る</button></div>`;
+  <div class="card"><div class="row"><button class="sub" id="stats">自分の成績・問題ごとの記録を見る</button><button class="sub" id="submit-q">問題を投稿する</button></div></div>`;
   $("#save-name").onclick = () => { profile.name = $("#name").value.trim() || profile.name; saveProfile(); };
   $("#solo").onclick = () => createRoom(false);
   $("#create").onclick = () => createRoom(true);
   $("#join").onclick = () => joinRoom($("#code").value.trim());
   $("#stats").onclick = renderStats;
+  $("#submit-q").onclick = renderSubmit;
+}
+
+// ---------- 画面: 問題の投稿 ----------
+// 投稿は Google フォームに送る（回答はフォーム所有者のスプレッドシートにだけ入り、外からは見えない）。
+// 送られた問題は Claude が文法だけ整えて data/07_user.txt に足す（手動。ジャンル「投稿」を付ける）。
+const SUBMIT_URL = "https://docs.google.com/forms/d/e/1FAIpQLSdaaCSXEzdVCobSoOu1kCelSglE75YAxTd-DtlPB92EELbG2g/formResponse";
+const SUBMIT_FIELDS = { text: "entry.1138395124", answer: "entry.1171775600", reading: "entry.688137783", accept: "entry.1489947042", genre: "entry.893360912", name: "entry.655950683" };
+function renderSubmit() {
+  stopAll();
+  app.innerHTML = `
+  <div class="card">
+    <h2>問題を投稿する</h2>
+    <p class="muted">投稿された問題は、文法だけ整えてから出題に加えます（反映は不定期）。加わった問題にも、ほかの問題と同じように👎が付けられます。</p>
+    <ul class="muted" style="margin:6px 0 12px 1.2em;padding:0">
+      <li>難しいヒントから先に書き、だんだん易しくなるように</li>
+      <li>答えが一つに決まるように（同じ種類の言葉で別の答えにならないように）</li>
+      <li>問題文の中に答えそのものを書かないように</li>
+    </ul>
+    <label>問題文（必須）<textarea id="sq-text" rows="3" maxlength="300" style="width:100%" placeholder="〜は何でしょう？"></textarea></label>
+    <div class="row">
+      <label style="flex:1">答え（必須）<input type="text" id="sq-answer" maxlength="40" style="width:100%"></label>
+      <label style="flex:1">答えの読み・ひらがな（必須）<input type="text" id="sq-reading" maxlength="40" style="width:100%"></label>
+    </div>
+    <div class="row">
+      <label style="flex:1">別の正解（あれば。「、」区切り）<input type="text" id="sq-accept" maxlength="80" style="width:100%"></label>
+      <label style="flex:1">ジャンル（任意）<input type="text" id="sq-genre" maxlength="20" style="width:100%"></label>
+    </div>
+    <label>投稿者名（任意）<input type="text" id="sq-name" maxlength="20" value="${esc(profile.name)}"></label>
+    <div class="row" style="margin-top:12px"><button id="sq-send">送信する</button><button class="sub" id="back">戻る</button><span id="sq-msg" class="muted"></span></div>
+  </div>`;
+  $("#back").onclick = renderHome;
+  $("#sq-send").onclick = async () => {
+    const v = (id) => $("#" + id).value.trim();
+    const d = { text: v("sq-text"), answer: v("sq-answer"), reading: toHira(v("sq-reading").normalize("NFKC")), accept: v("sq-accept"), genre: v("sq-genre"), name: v("sq-name") };
+    const msg = (t) => ($("#sq-msg").textContent = t);
+    if (!d.text || !d.answer || !d.reading) return msg("問題文・答え・読みは必須です");
+    if (!/^[ぁ-んー]+$/.test(d.reading)) return msg("読みはひらがなで入力してください");
+    if (norm(d.text).includes(norm(d.answer))) return msg("問題文の中に答えが入っています");
+    const body = new URLSearchParams();
+    for (const [k, f] of Object.entries(SUBMIT_FIELDS)) body.append(f, d[k]);
+    $("#sq-send").disabled = true; msg("送信中…");
+    try {
+      await fetch(SUBMIT_URL, { method: "POST", mode: "no-cors", body });
+      msg("送信しました。ありがとうございます！");
+      for (const id of ["sq-text", "sq-answer", "sq-reading", "sq-accept"]) $("#" + id).value = "";
+    } catch (e) { msg("送信できませんでした：" + e.message); }
+    $("#sq-send").disabled = false;
+  };
 }
 
 function createRoom(online) {
