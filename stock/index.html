@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>簡単早押しクイズ 株式版</title>
+<link rel="stylesheet" href="../style.css">
+<link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#263a5c">
+<meta name="description" content="株・投資の問題だけで遊べる早押しクイズ。証券コード、市場のしくみ、相場の歴史、投資家の言葉まで。">
+<link rel="icon" href="../icons/icon-192.png">
+<link rel="apple-touch-icon" href="../icons/apple-touch-icon.png">
+</head>
+<body>
+<header>
+  <h1><a href="./" id="logo" title="トップページへ">簡単早押しクイズ <small>株式版</small></a></h1>
+  <div class="row"><div id="me-box"></div><button id="pause-btn" class="sub" style="display:none" title="一時停止（P / Esc）">⏸ 一時停止</button></div>
+</header>
+<main id="app"></main>
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script src="../questions.js"></script>
+<script src="../questions2.js"></script>
+<script src="../questions3.js"></script>
+<script>window.EHQ_EDITION = "stock";</script>
+<script src="../app.js"></script>
+<script>if ("serviceWorker" in navigator) navigator.serviceWorker.register("../sw.js");</script>
+</body>
+</html>

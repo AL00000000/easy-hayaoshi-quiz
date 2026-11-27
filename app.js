@@ -470,13 +470,13 @@ class Host {
 const nameOfPlayer = (players, pid) => (players.find((p) => p.id === pid) || {}).name || "？";
 function defaultSettings() {
   const s = Object.assign({ mode: 1, input: "choice", pct: 50, count: 10, tts: true, charMs: 120, genre: "all" }, LS.get("ehq.settings", {}));
-  if (EDITION === "pokemon") s.genre = "pokemon"; // ポケモン版は常にポケモンだけ
+  if (EDITION !== "all") s.genre = EDITION; // ポケモン版・株式版は常にそのジャンルだけ
   return s;
 }
 
 // 正答率の低い問題ほど高ランクの部屋で多く出す
 // ジャンルの絞り込み（"all" ならすべて）
-const GENRE_FILTERS = { all: ["すべて", () => true], pokemon: ["ポケモンだけ", (q) => q.genre === "ポケモン" || /ポケモン|ポケットモンスター/.test(q.text)] };
+const GENRE_FILTERS = { all: ["すべて", () => true], pokemon: ["ポケモンだけ", (q) => q.genre === "ポケモン" || /ポケモン|ポケットモンスター/.test(q.text)], stock: ["株式だけ", (q) => q.genre === "株式"] };
 function pickQuestions(count, rank, genre = "all") {
   const target = RANK_TARGET[rank];
   const pool = window.QUESTIONS.filter((GENRE_FILTERS[genre] || GENRE_FILTERS.all)[1]);
@@ -574,14 +574,15 @@ const DAILY_FIELDS = { date: "entry.1524584379", name: "entry.1927649045", rec: 
 const DAILY_SHEET = "https://docs.google.com/spreadsheets/d/1v7S6vgtqQ9nWrvLPNtPEdW0XrfrU5N4ejDxgeVhGwSs/gviz/tq";
 const SITE_URL = "https://al00000000.github.io/easy-hayaoshi-quiz/";
 // 版：全体版（/）とポケモン版（/pokemon/）は URL を分ける。ポケモン版は pokemon/index.html で EHQ_EDITION を設定する
-const EDITION = window.EHQ_EDITION === "pokemon" ? "pokemon" : "all";
+// 版：全体版（/）・ポケモン版（/pokemon/）・株式版（/stock/）
+const EDITION = ["pokemon", "stock"].includes(window.EHQ_EDITION) ? window.EHQ_EDITION : "all";
 const BASE = EDITION === "all" ? "" : "../"; // サイト直下のファイル（プライバシーポリシーなど）への相対パス
-const EDITION_URL = { all: SITE_URL, pokemon: SITE_URL + "pokemon/" };
+const EDITION_URL = { all: SITE_URL, pokemon: SITE_URL + "pokemon/", stock: SITE_URL + "stock/" };
 // 日本時間の日付（YYYY-MM-DD）
 const todayKey = (offsetDays = 0) => new Date(Date.now() + 9 * 3600e3 + offsetDays * 86400e3).toISOString().slice(0, 10);
 // シートで日付に自動変換されないよう、記録には「d20261127」の形で書く
 // ジャンルごとに別の記録にする（全体は d、ポケモンは p）
-const DAILY_MODES = { all: { label: "今日の10問", tag: "d", ls: "ehq.daily" }, pokemon: { label: "今日の10問（ポケモン）", tag: "p", ls: "ehq.daily.pokemon" } };
+const DAILY_MODES = { all: { label: "今日の10問", tag: "d", ls: "ehq.daily" }, pokemon: { label: "今日の10問（ポケモン）", tag: "p", ls: "ehq.daily.pokemon" }, stock: { label: "今日の10問（株式）", tag: "s", ls: "ehq.daily.stock" } };
 const dailyTag = (key, mode = "all") => DAILY_MODES[mode].tag + key.replace(/-/g, "");
 function hash32(str) { let h = 0x811c9dc5; for (const ch of str) { h ^= ch.codePointAt(0); h = Math.imul(h, 16777619) >>> 0; } return h; }
 // 日付と問題IDのハッシュが小さい順に10問。全員が同じ10問になる（問題が増えても大半は変わらない）
@@ -893,7 +894,7 @@ function renderLobby() {
         <option value="choice" ${s.input === "choice" ? "selected" : ""}>ひらがな4択</option>
         <option value="voice" ${s.input === "voice" ? "selected" : ""} ${s.mode === 2 ? "disabled" : ""}>音声入力${s.mode === 2 ? "（方式2では使えません）" : ""}</option>
       </select></label>
-    <label ${EDITION === "pokemon" ? 'style="display:none"' : ""}>ジャンル <select id="s-genre" ${dis}>${Object.entries(GENRE_FILTERS).map(([k, [l]]) => `<option value="${k}" ${(s.genre || "all") === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+    <label ${EDITION !== "all" ? 'style="display:none"' : ""}>ジャンル <select id="s-genre" ${dis}>${Object.entries(GENRE_FILTERS).map(([k, [l]]) => `<option value="${k}" ${(s.genre || "all") === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
     <label>問題数 <select id="s-count" ${dis}>${[5, 10, 15, 20].map((v) => `<option ${s.count === v ? "selected" : ""}>${v}</option>`).join("")}</select></label>
     <label>文字の速さ <select id="s-speed" ${dis}>${[[160, "ゆっくり"], [120, "ふつう"], [85, "はやい"]].map(([v, l]) => `<option value="${v}" ${s.charMs === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
     <label><input type="checkbox" id="s-tts" ${s.tts ? "checked" : ""} ${dis}> 問題文を音声で読み上げる</label>
@@ -908,8 +909,8 @@ function renderLobby() {
     const mode = Number($("#s-mode").value);
     let input = $("#s-input").value;
     if (mode === 2) input = "choice"; // 方式2は同時に複数人が答えるため音声入力は不可
-    const ns = { mode, input, pct: Number($("#s-pct").value), count: Number($("#s-count").value), charMs: Number($("#s-speed").value), tts: $("#s-tts").checked, genre: EDITION === "pokemon" ? "pokemon" : $("#s-genre").value };
-    if (EDITION === "pokemon") { LS.set("ehq.settings", { ...ns, genre: LS.get("ehq.settings", {}).genre || "all" }); client.host.setSettings(ns); return; }
+    const ns = { mode, input, pct: Number($("#s-pct").value), count: Number($("#s-count").value), charMs: Number($("#s-speed").value), tts: $("#s-tts").checked, genre: EDITION !== "all" ? EDITION : $("#s-genre").value };
+    if (EDITION !== "all") { LS.set("ehq.settings", { ...ns, genre: LS.get("ehq.settings", {}).genre || "all" }); client.host.setSettings(ns); return; }
     LS.set("ehq.settings", ns);
     client.host.setSettings(ns);
   };
