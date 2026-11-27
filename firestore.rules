@@ -1,0 +1,27 @@
+rules_version = '2';
+// 簡単早押しクイズ（Firebase プロジェクト easy-hayaoshi-quiz）の Firestore ルール。
+// 変えたら Firebase コンソールの Firestore ＞ ルール に貼り付けて公開する（このファイルは控え）。
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // プレイヤーの記録：誰でも読める（ランキング用）。書けるのは本人（匿名ログインのuid）だけ。
+    match /players/{uid} {
+      allow read: if true;
+      allow create, update: if request.auth != null && request.auth.uid == uid
+        && request.resource.data.keys().hasOnly(['name', 'rating', 'games', 'profileId', 'me', 'updated'])
+        && request.resource.data.name is string && request.resource.data.name.size() <= 16
+        && request.resource.data.rating is number && request.resource.data.rating >= 0 && request.resource.data.rating <= 5000
+        && request.resource.data.games is int && request.resource.data.games >= 0
+        && request.resource.data.me is map;
+      allow delete: if request.auth != null && request.auth.uid == uid;
+    }
+    // 引き継ぎコード：コードを知っていれば1件だけ読める（一覧は取れない）。作れるのは自分のuid宛てだけ。
+    match /transfers/{code} {
+      allow get: if code.size() == 10;
+      allow list: if false;
+      allow create: if request.auth != null && code.size() == 10
+        && request.resource.data.keys().hasOnly(['uid', 'created'])
+        && request.resource.data.uid == request.auth.uid;
+      allow update, delete: if false;
+    }
+  }
+}

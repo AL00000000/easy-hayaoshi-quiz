@@ -78,3 +78,9 @@ a.btn { display: inline-block; padding: 8px 16px; border-radius: 6px; background
 #qr-img svg { width: 100%; height: auto; display: block; }
 .qr-url { font-size: 12px; word-break: break-all; color: #555; margin: 10px 0; }
 .qr-close { position: absolute; top: 8px; right: 8px; padding: 2px 9px; }
+
+/* ランキング */
+.rank-table { width: 100%; border-collapse: collapse; }
+.rank-table td { padding: 4px 6px; border-bottom: 1px solid #e5e0d5; }
+.rank-table td:first-child { width: 2.5em; text-align: right; color: #888; }
+.rank-table .me-row { background: #fff4d6; font-weight: bold; }

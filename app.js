@@ -85,7 +85,7 @@ const QMAP = Object.fromEntries(window.QUESTIONS.map((q) => [q.id, q]));
 // ===================== プロフィール・ランク =====================
 let profile = LS.get("ehq.profile", null);
 if (!profile) { profile = { id: rid(), name: "ゲスト" + Math.floor(Math.random() * 900 + 100), rating: 1000, games: 0 }; LS.set("ehq.profile", profile); }
-const saveProfile = () => { LS.set("ehq.profile", profile); drawMe(); };
+const saveProfile = () => { LS.set("ehq.profile", profile); drawMe(); if (typeof cloudSync === "function") cloudSync(); };
 // レーティング → ランク（境界は暫定）
 const RANKS = [["S", 1500], ["A", 1300], ["B", 1100], ["C", -Infinity]];
 const rankOf = (r) => RANKS.find(([, t]) => r >= t)[0];
@@ -142,7 +142,7 @@ function recordReveal(q, results, players) {
 // 構造: { total:{seen,answered,correct}, genre:{[ジャンル]:{seen,answered,correct}}, pos:[10]（正解時の押し位置）, posWrong:[10] }
 const myKey = () => "ehq.me." + profile.id;
 let me = LS.get(myKey(), null) || { total: { seen: 0, answered: 0, correct: 0 }, genre: {}, pos: Array(POS_BINS).fill(0), posWrong: Array(POS_BINS).fill(0) };
-const saveMe = () => LS.set(myKey(), me);
+const saveMe = () => { LS.set(myKey(), me); if (typeof cloudSync === "function") cloudSync(); };
 function recordMine(q, r) {
   const gs = (me.genre[q.genre] ||= { seen: 0, answered: 0, correct: 0 });
   for (const t of [me.total, gs]) { t.seen++; if (r) { t.answered++; if (r.ok) t.correct++; } }
@@ -858,7 +858,7 @@ function renderHome() {
     </div>
     <p class="muted">早押しはクリックかスペースキー。答えはひらがな4択（1〜4キーでも選べます）か、音声入力。</p>
   </div>
-  <div class="card"><div class="row"><button class="sub" id="stats">自分の成績・問題ごとの記録を見る</button><button class="sub" id="submit-q">問題を投稿する</button></div></div>
+  <div class="card"><div class="row"><button class="sub" id="stats">自分の成績・問題ごとの記録を見る</button><button class="sub" id="submit-q">問題を投稿する</button><button class="sub" id="cloud">ランキング・別の端末で続きを遊ぶ</button></div></div>
   <p class="muted" style="text-align:center"><a href="${BASE}privacy.html">プライバシーポリシー</a></p>`;
   $("#save-name").onclick = () => { profile.name = $("#name").value.trim() || profile.name; saveProfile(); };
   $("#solo").onclick = () => { client.daily = null; createRoom(false); };
@@ -867,6 +867,7 @@ function renderHome() {
   $("#join").onclick = () => joinRoom($("#code").value.trim());
   $("#stats").onclick = renderStats;
   $("#submit-q").onclick = renderSubmit;
+  $("#cloud").onclick = () => (typeof renderCloud === "function" ? renderCloud() : alert("読み込み中です。少し待ってからもう一度押してください"));
 }
 
 // ---------- 画面: 問題の投稿 ----------
