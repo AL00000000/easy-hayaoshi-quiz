@@ -3,6 +3,7 @@
   - 読みは省略可（答えがカナだけなら自動でひらがなにする）
   - 別解・読み上げ用文・もう一回は省略可。「もう一回」は惜しい答え（正解にはしないが、1回だけ答え直せる）。
     入力に答え・別解がまるごと含まれる場合（みずほ→みずほ銀行）は自動で「もう一回」になるので、それ以外の惜しい答えだけを書く。
+  - 問題を消すときは、行を消さずにジャンルを「削除」にする（番号がずれない）
   - 「元素記号Xx」は読み上げで自動的にアルファベット読みにする
 使い方: python tools/build_questions.py
 """
@@ -55,6 +56,10 @@ def main():
                 continue
             parts += [""] * (7 - len(parts))
             genre, text, answer, reading, accept, tts, retry = [p.strip() for p in parts[:7]]
+            if genre == "削除":
+                # 消した問題：行を残して番号だけ進める（後ろの問題のIDと記録がずれないように）
+                n += 1
+                continue
             if not reading:
                 reading = to_hira(re.sub(r"[・＝=\s]", "", answer))
             n += 1
