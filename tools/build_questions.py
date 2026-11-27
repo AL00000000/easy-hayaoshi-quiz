@@ -3,6 +3,7 @@
   - 読みは省略可（答えがカナだけなら自動でひらがなにする）
   - 別解・読み上げ用文・もう一回は省略可。「もう一回」は惜しい答え（正解にはしないが、1回だけ答え直せる）。
     入力に答え・別解がまるごと含まれる場合（みずほ→みずほ銀行）は自動で「もう一回」になるので、それ以外の惜しい答えだけを書く。
+  - 問題文を「◇」で区切ると、出し方が複数ある問題になる（出題のたびに1つを選ぶ。「証券コード」から始まる文は合わせて20%）
   - 問題を消すときは、行を消さずにジャンルを「削除」にする（番号がずれない）
   - 「元素記号Xx」は読み上げで自動的にアルファベット読みにする
 使い方: python tools/build_questions.py
@@ -63,11 +64,18 @@ def main():
             if not reading:
                 reading = to_hira(re.sub(r"[・＝=\s]", "", answer))
             n += 1
+            texts = [x.strip() for x in text.split("◇") if x.strip()]
+            text = texts[0]
             q = {"id": f"{base}-{n:03d}", "genre": genre, "text": text, "answer": answer, "reading": reading,
                  "accept": [a for a in accept.split(";") if a]}
             t = tts or tts_for(text)
             if t:
                 q["tts"] = t
+            if len(texts) > 1:
+                # 問題文の出し方が複数ある問題（出題のたびに1つを選ぶ。証券コードから始まるものは合わせて20%）
+                if tts:
+                    problems.append(f"{base}:{ln} 問題文が複数あるときは読み上げ用文を書けない")
+                q["variants"] = [{"text": x, **({"tts": tts_for(x)} if tts_for(x) else {})} for x in texts]
             if retry:
                 q["retry"] = [a for a in retry.split(";") if a]
             q["_where"] = f"{base}:{ln}"
@@ -83,17 +91,18 @@ def main():
         if na in seen:
             problems.append(f"{w} 答えが重複: {q['answer']}（{seen[na]}）")
         seen[na] = q["id"]
-        t = norm(q["text"])
-        for a in {q["answer"], q["reading"], *q["accept"]}:
-            a = norm(a)
-            if len(a) >= 2 and a in t:
-                problems.append(f"{w} 答え「{a}」が問題文に入っている: {q['answer']}")
+        for vt in [v["text"] for v in q.get("variants", [])] or [q["text"]]:
+            t = norm(vt)
+            for a in {q["answer"], q["reading"], *q["accept"]}:
+                a = norm(a)
+                if len(a) >= 2 and a in t:
+                    problems.append(f"{w} 答え「{a}」が問題文に入っている: {q['answer']}")
+            if not vt.endswith("？"):
+                problems.append(f"{w} 問題文が「？」で終わっていない: {vt[:20]}")
         ok_forms = {norm(a) for a in (q["answer"], q["reading"], *q["accept"])}
         for r in q.get("retry", []):
             if norm(r) in ok_forms:
                 problems.append(f"{w} 「もう一回」に正解と同じ答えがある: {r}")
-        if not q["text"].endswith("？"):
-            problems.append(f"{w} 問題文が「？」で終わっていない")
 
     js = "// 追加問題（tools/build_questions.py が data/*.txt から生成。直接編集しない）\nwindow.QUESTIONS.push(\n"
     for q in rows:

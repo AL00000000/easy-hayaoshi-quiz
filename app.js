@@ -404,7 +404,7 @@ class Host {
   next() {
     this.qi++;
     if (this.qi >= this.qlist.length) return this.finish();
-    const q = this.qlist[this.qi];
+    const q = withVariant(this.qlist[this.qi], this.daily && this.daily.key);
     const n = this.players.length;
     const slots = this.settings.mode === 1 ? 1 : Math.max(1, Math.ceil((n * this.settings.pct) / 100));
     this.cur = { q, buzzes: [], rights: [], results: {}, closed: false, slots, timeUp: false };
@@ -601,6 +601,25 @@ const todayKey = (offsetDays = 0) => new Date(Date.now() + 9 * 3600e3 + offsetDa
 // ジャンルごとに別の記録にする（全体は d、ポケモンは p）
 const DAILY_MODES = { all: { label: "今日の10問", tag: "d", ls: "ehq.daily" }, pokemon: { label: "今日の10問（ポケモン）", tag: "p", ls: "ehq.daily.pokemon" }, stock: { label: "今日の10問（株式）", tag: "s", ls: "ehq.daily.stock" } };
 const dailyTag = (key, mode = "all") => DAILY_MODES[mode].tag + key.replace(/-/g, "");
+// 問題文の出し方が複数ある問題は、出題のたびに1つを選ぶ。「証券コード」から始まる文は合わせて20%
+// （コードを覚えている人だけが極端に有利にならないように。本人の要望）。今日の10問は日付で決めて全員同じ文にする
+const CODE_FIRST_RATE = 0.2;
+function withVariant(q, seed) {
+  const vs = q.variants;
+  if (!vs || vs.length < 2) return q;
+  const code = vs.filter((v) => v.text.startsWith("証券コード")), other = vs.filter((v) => !v.text.startsWith("証券コード"));
+  // hash32 は似た文字列どうしで値が近くなるので、混ぜてから使う（hash32 自体は今日の10問の選び方に使うので変えない）
+  const mix = (h) => { h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16; return h >>> 0; };
+  const r = seed ? mix(hash32(seed + ":" + q.id)) / 4294967296 : Math.random();
+  let pool, x;
+  if (!code.length || !other.length) { pool = vs; x = r; }
+  else if (r < CODE_FIRST_RATE) { pool = code; x = r / CODE_FIRST_RATE; }
+  else { pool = other; x = (r - CODE_FIRST_RATE) / (1 - CODE_FIRST_RATE); }
+  const v = pool[Math.min(pool.length - 1, Math.floor(x * pool.length))];
+  const out = { ...q, text: v.text };
+  if (v.tts) out.tts = v.tts; else delete out.tts;
+  return out;
+}
 function hash32(str) { let h = 0x811c9dc5; for (const ch of str) { h ^= ch.codePointAt(0); h = Math.imul(h, 16777619) >>> 0; } return h; }
 // 日付と問題IDのハッシュが小さい順に10問。全員が同じ10問になる（問題が増えても大半は変わらない）
 function dailyQuestions(key, mode = "all") {
