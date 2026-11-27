@@ -1289,10 +1289,12 @@ function startVoiceAnswer() {
     <div class="timer"><div id="tbar" style="width:100%"></div></div>
     <p class="muted">${SR ? "マイクに向かって答えを言ってください。認識された文字を確認して Enter で解答（直接書き換えもできます）。" : "このブラウザは音声認識に対応していません（Chrome / Edge で使えます）。答えを入力して Enter で解答してください。"}</p>
     <div id="retry-msg"></div>
+    <div id="snap-msg"></div>
     <input type="text" id="voice-input" class="voice-text" style="width:100%" autocomplete="off">
     <div class="row" style="margin-top:8px"><button id="voice-ok">この答えで解答（Enter）</button>${SR ? `<button class="sub" id="voice-retry">言い直す</button>` : ""}</div>`;
   const inp = $("#voice-input");
   inp.focus();
+  loadPokemonNames(); // 答えがポケモンの名前なら、聞き取りを近いポケモンに寄せる（初回だけ読み込む）
   // timeUp のときは「もう一回」にしない（残り時間がないため）
   const submit = (timeUp) => {
     if (c.myState !== "answering") return;
@@ -1314,6 +1316,48 @@ function startVoiceAnswer() {
   if (SR) { $("#voice-retry").onclick = () => { inp.value = ""; startRecognition(inp); }; startRecognition(inp); }
   startTimer(VOICE_MS, () => submit(true));
 }
+// ----- 音声入力：聞き取った音を、いちばん近いポケモンの名前に寄せる（本人の要望・2026-11-28）-----
+// ポケモンの固有名詞は音声認識で当たりにくいので、答えがポケモンの名前の問題だけ、
+// 聞き取った候補（最大5つ）を全ポケモン（1025匹。pokemon_names.json）の名前と音で比べ、十分に近ければその名前に置き換える。
+// 比べる相手を全ポケモンにするのは、別のポケモンを言った人を誤って正解にしないため（エンブオー→エンブオーのまま×）。
+// 漢字で聞き取られたものは読みに直せないので、POKEMON_MISHEARD の表で補う（外れた聞き取りが分かったら足していく）
+const POKEMON_MISHEARD = { "具足": "グソクムシャ", "ポリゴンゼット": "ポリゴンZ", "ぽりごんぜっと": "ポリゴンZ", "ポリゴンツー": "ポリゴン2", "ぽりごんつー": "ポリゴン2" };
+let pokemonNames = null, pokemonNamesLoading = null;
+function loadPokemonNames() {
+  return (pokemonNamesLoading ||= fetch(BASE + "pokemon_names.json").then((r) => r.json()).then((xs) => {
+    pokemonNames = xs.map((name) => ({ name, k: phon(name), l: loose(name) })).filter((x) => x.k.length >= 2);
+    pokemonNames.set = new Set(pokemonNames.map((x) => x.l));
+    return pokemonNames;
+  }).catch(() => { pokemonNamesLoading = null; return null; }));
+}
+// 音で比べるための形：かなだけにして、濁点・半濁点・小さい字・っの違いを無視する。伸ばす音「ー」は前の母音にする（ちゅー→ちゅう）
+const VOWEL_OF = {};
+for (const [v, cs] of [["あ", "あかさたなはまやらわがざだばぱぁゃゎ"], ["い", "いきしちにひみりぎじぢびぴぃ"], ["う", "うくすつぬふむゆるぐずづぶぷぅゅゔ"], ["え", "えけせてねへめれげぜでべぺぇ"], ["お", "おこそとのほもよろをごぞどぼぽぉょ"]]) for (const ch of cs) VOWEL_OF[ch] = v;
+const longVowel = (s) => toHira(String(s).normalize("NFKC")).replace(/([ぁ-ゖ])ー/g, (m, ch) => ch + (VOWEL_OF[ch] || ""));
+const SMALL_KANA = { ぁ: "あ", ぃ: "い", ぅ: "う", ぇ: "え", ぉ: "お", ゃ: "や", ゅ: "ゆ", ょ: "よ", ゎ: "わ", ゕ: "か", ゖ: "け" };
+const phon = (s) => loose(longVowel(s)).normalize("NFD").replace(/[゙゚]/g, "").normalize("NFC").replace(/っ/g, "").replace(/[ぁぃぅぇぉゃゅょゎゕゖ]/g, (c) => SMALL_KANA[c]).replace(/[^ぁ-ゖ]/g, "");
+const isPokemonAnswer = (q) => !!pokemonNames && pokemonNames.set.has(loose(q.answer));
+// 候補の中からいちばん近いポケモンを1匹選ぶ。近さが同じポケモンが2匹以上いるときは決めない（null）
+function snapPokemon(transcripts) {
+  if (!pokemonNames) return null;
+  let best = null;
+  for (let t of transcripts) {
+    for (const [k, v] of Object.entries(POKEMON_MISHEARD)) t = t.split(k).join(v);
+    // そのままの形（伸ばす音も残す）→ 伸ばす音を無視した形 →「です」などを外した形、の順に、名前とぴったり合うものを探す（ガメノデス・パーモット/パモット）
+    const nt = norm(t), lt = loose(t), l = lt.replace(/です$/, "").replace(/^(こたえは|えーと|えっと)/, "");
+    if (!l) continue;
+    const exact = pokemonNames.find((x) => norm(x.name) === nt) || pokemonNames.find((x) => x.l === lt) || pokemonNames.find((x) => x.l === l);
+    if (exact) return { name: exact.name, heard: t };
+    if (/[^ぁ-ゖ]/.test(l)) continue; // 漢字・英字が残るものは音に直せない
+    const k = phon(l);
+    if (k.length < 2) continue;
+    const scored = pokemonNames.map((x) => ({ x, d: editDistance(k, x.k), d2: editDistance(l, x.l) })).sort((a, b) => a.d - b.d || a.d2 - b.d2);
+    const [a, b] = scored, lim = a.x.k.length <= 3 ? 1 : a.x.k.length <= 5 ? 2 : 3;
+    if (a.d > lim || (b && b.d === a.d && b.d2 === a.d2)) continue;
+    if (!best || a.d < best.d) best = { name: a.x.name, heard: t, d: a.d };
+  }
+  return best;
+}
 function startRecognition(inp, keep) {
   const c = client.game.cur;
   try { c.rec && c.rec.abort(); } catch {}
@@ -1326,7 +1370,19 @@ function startRecognition(inp, keep) {
     for (const r of e.results) {
       // 候補の中に正解があればそれを採用（同音の別表記で誤判定するのを減らす）
       let best = r[0].transcript;
-      if (r.isFinal) for (const alt of r) if (judgeText(c.q, alt.transcript)) { best = alt.transcript; break; }
+      if (r.isFinal) {
+        const alts = [...r].map((x) => x.transcript);
+        const hit = alts.find((x) => judgeText(c.q, x));
+        if (hit) best = hit;
+        else if (isPokemonAnswer(c.q)) {
+          const sn = snapPokemon(alts);
+          if (sn) {
+            const el = $("#snap-msg");
+            if (el && loose(sn.heard) !== loose(sn.name)) el.innerHTML = `<span class="muted">聞き取り「${esc(sn.heard)}」→ <b>${esc(sn.name)}</b> にしました（違うときは書き換えてください）</span>`;
+            best = sn.name;
+          }
+        }
+      }
       t += best;
     }
     inp.value = base + t.replace(/[。、]/g, "");
