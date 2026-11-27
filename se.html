@@ -17,7 +17,7 @@
 </head>
 <body>
 <h1>出題のときの効果音（候補）</h1>
-<p>押すと鳴ります。気に入った番号を教えてください（いま使っているのは 1）。</p>
+<p>押すと鳴ります。気に入った番号を教えてください（いま使っているのは 1）。10〜19はデデン系を作り直した新しい候補です。</p>
 <div class="list" id="list"></div>
 <script>
 let ctx = null;
@@ -50,8 +50,66 @@ const CANDS = [
   ["ピコン", "短く軽いチャイム", () => { tone(1318.5, 0, 0.12, { type: "square", vol: 0.08, filter: 5000 }); tone(1760, 0.08, 0.35, { type: "sine", vol: 0.18 }); }],
   ["ドン・ドン・ジャーン", "太鼓2つと和音", () => { [0, 0.18].forEach((st) => { tone(70, st, 0.25, { type: "sine", vol: 0.45, to: 45 }); noise(st, 0.06, { vol: 0.1, hp: 100, lp: 1500 }); }); for (const f of [220, 277.2, 329.6]) tone(f, 0.4, 0.9, { type: "sawtooth", vol: 0.08, filter: 2000 }); noise(0.4, 0.8, { vol: 0.08, hp: 5000 }); }],
 ];
+
+// ===== デデン系の新しい音作り（ブラス・ティンパニ・残響を重ねる） =====
+let bus = null, rev = null;
+function master() {
+  const c = ac();
+  if (bus) return { c, bus, rev };
+  const comp = c.createDynamicsCompressor(); comp.threshold.value = -14; comp.ratio.value = 4; comp.connect(c.destination);
+  bus = c.createGain(); bus.gain.value = 0.9; bus.connect(comp);
+  // 残響：減衰するノイズのインパルス応答
+  const len = c.sampleRate * 1.6, ir = c.createBuffer(2, len, c.sampleRate);
+  for (let ch = 0; ch < 2; ch++) { const d = ir.getChannelData(ch); for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / len, 3); }
+  rev = c.createConvolver(); rev.buffer = ir; const rg = c.createGain(); rg.gain.value = 0.35; rev.connect(rg); rg.connect(comp);
+  return { c, bus, rev };
+}
+const mtof = (m) => 440 * Math.pow(2, (m - 69) / 12);
+function out(node, wet = 0.4) { const { bus, rev } = master(); node.connect(bus); const s = master().c.createGain(); s.gain.value = wet; node.connect(s); s.connect(rev); }
+// ブラス：ずらした鋸歯状波を重ね、フィルターを一瞬で開いて閉じる
+function brass(notes, st, dur, { vol = 0.12, bright = 3500, wet = 0.4, detune = 8 } = {}) {
+  const { c } = master(), t = c.currentTime + st, f = c.createBiquadFilter(), g = c.createGain();
+  f.type = "lowpass"; f.Q.value = 2; f.frequency.setValueAtTime(300, t); f.frequency.exponentialRampToValueAtTime(bright, t + 0.03); f.frequency.exponentialRampToValueAtTime(bright * 0.35, t + dur);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.012); g.gain.setTargetAtTime(vol * 0.6, t + 0.06, 0.08); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  f.connect(g); out(g, wet);
+  for (const m of notes) for (const d of [-detune, 0, detune]) { const o = c.createOscillator(); o.type = "sawtooth"; o.frequency.value = mtof(m); o.detune.value = d; o.connect(f); o.start(t); o.stop(t + dur + 0.1); }
+}
+// ティンパニ：音程が少し下がる正弦波＋打撃のノイズ
+function timp(m, st, dur = 0.9, vol = 0.5, wet = 0.3) {
+  const { c } = master(), t = c.currentTime + st, o = c.createOscillator(), g = c.createGain();
+  o.type = "sine"; o.frequency.setValueAtTime(mtof(m) * 1.08, t); o.frequency.exponentialRampToValueAtTime(mtof(m), t + 0.08);
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.004); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  o.connect(g); out(g, wet); o.start(t); o.stop(t + dur + 0.05);
+  hit(st, 0.08, vol * 0.25, 120, 1800, wet);
+}
+function hit(st, dur, vol, hp, lp, wet = 0.3) {
+  const { c } = master(), t = c.currentTime + st, len = Math.ceil(c.sampleRate * dur), b = c.createBuffer(1, len, c.sampleRate), d = b.getChannelData(0);
+  for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+  const s = c.createBufferSource(), h = c.createBiquadFilter(), l = c.createBiquadFilter(), g = c.createGain();
+  s.buffer = b; h.type = "highpass"; h.frequency.value = hp; l.type = "lowpass"; l.frequency.value = lp;
+  g.gain.setValueAtTime(0.0001, t); g.gain.exponentialRampToValueAtTime(vol, t + 0.003); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+  s.connect(h); h.connect(l); l.connect(g); out(g, wet); s.start(t); s.stop(t + dur);
+}
+const crash = (st, dur = 1.6, vol = 0.12) => hit(st, dur, vol, 4500, 14000, 0.5);
+// オーケストラヒット：ブラス＋低音＋ティンパニ＋打撃
+function orch(chord, bassM, st, dur, o = {}) { brass(chord, st, dur, o); brass([bassM, bassM + 12], st, dur, { ...o, vol: (o.vol || 0.12) * 0.9, bright: 1500 }); timp(bassM, st, dur + 0.3, o.timp ?? 0.5); hit(st, 0.05, 0.12, 800, 6000); }
+// 和音（MIDI番号）：C4=60
+const Cm = [60, 63, 67], C = [60, 64, 67], G = [55, 59, 62], Gm = [55, 58, 62], Fsdim = [54, 57, 60];
+CANDS.push(
+  ["オーケストラ・デデン（下がる）", "ブラスとティンパニの2連打。1打目G→2打目C、残響あり", () => { orch(G, 43, 0, 0.16); orch(C, 36, 0.21, 0.9); }],
+  ["ブラス・デデン（同じ高さ）", "短調の和音を同じ高さで2回。2打目を長く", () => { orch(Cm, 36, 0, 0.14); orch(Cm, 36, 0.19, 1.0); }],
+  ["重低音デデン", "低いブラスと大きいティンパニ。圧の強い音", () => { orch([48, 51, 55], 24, 0, 0.18, { bright: 1800, vol: 0.14, timp: 0.7 }); orch([43, 46, 50], 19, 0.23, 1.1, { bright: 1600, vol: 0.15, timp: 0.8 }); }],
+  ["緊張感デデン", "不協和な和音で始まり、短調に落ちる", () => { orch(Fsdim, 42, 0, 0.15); orch(Cm, 36, 0.2, 1.0); }],
+  ["速いデデン", "間を詰めた歯切れのよい2連打", () => { orch(Gm, 43, 0, 0.09, { bright: 4500 }); orch(Cm, 36, 0.12, 0.75, { bright: 4500 }); }],
+  ["デデン＋シンバル", "2打目でシンバルが広がる派手な版", () => { orch(G, 43, 0, 0.16); orch(C, 36, 0.21, 1.0); crash(0.21, 2.0, 0.14); }],
+  ["シンセ・デデン", "電子的な音色。フィルターが開く音", () => { brass([55, 62, 67], 0, 0.15, { vol: 0.1, bright: 6000, wet: 0.25, detune: 18 }); brass([48, 55, 60], 0.2, 0.8, { vol: 0.11, bright: 6000, wet: 0.25, detune: 18 }); hit(0, 0.05, 0.1, 2000, 9000); hit(0.2, 0.05, 0.1, 2000, 9000); }],
+  ["ドドン（ティンパニだけ）", "打楽器だけの低い2連打", () => { timp(43, 0, 0.5, 0.7); timp(36, 0.2, 1.3, 0.8); }],
+  ["デデンッ（上がる）", "2打目が上がって明るく終わる", () => { orch(C, 36, 0, 0.15); orch([65, 69, 72], 41, 0.2, 0.9); }],
+  ["ピアノ低音デデン", "ピアノの低い和音をたたく感じ", () => { const pn = (ms, st, d) => ms.forEach((m) => { tone(mtof(m), st, d, { type: "triangle", vol: 0.12 }); tone(mtof(m) * 2, st, d * 0.6, { type: "sine", vol: 0.05 }); }); pn([31, 43, 50, 55], 0, 0.5); pn([24, 36, 43, 48, 51], 0.2, 1.6); }],
+);
 const list = document.getElementById("list");
 CANDS.forEach(([name, desc, fn], i) => {
+  if (i === 9) { const h = document.createElement("h2"); h.textContent = "デデン系の新しい候補（10〜19）"; h.style.cssText = "font-size:17px;margin:18px 0 2px"; list.appendChild(h); }
   const b = document.createElement("button");
   b.innerHTML = `<span class="no">${i + 1}</span><span>${name}<span class="desc">${desc}</span></span>`;
   b.onclick = () => { ac(); fn(); };
