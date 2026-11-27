@@ -501,6 +501,7 @@ function pickQuestions(count, rank, genre = "all") {
     const p = acc == null ? 0.6 : acc; // データがない問題は「やや易しい」とみなす
     let w = Math.exp(-((p - target) ** 2) / (2 * 0.2 ** 2)) + 0.05;
     if (isBadCandidate(stats[q.id])) w *= 0.3;
+    if (genre === "stock") w *= q.weight || 1; // 出やすさ（株式版だけ。日経平均の構成銘柄などの大型株を重くしてある。本人の要望）
     return { q, w };
   });
   const out = [];
@@ -608,9 +609,7 @@ function withVariant(q, seed) {
   const vs = q.variants;
   if (!vs || vs.length < 2) return q;
   const code = vs.filter((v) => v.text.startsWith("証券コード")), other = vs.filter((v) => !v.text.startsWith("証券コード"));
-  // hash32 は似た文字列どうしで値が近くなるので、混ぜてから使う（hash32 自体は今日の10問の選び方に使うので変えない）
-  const mix = (h) => { h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16; return h >>> 0; };
-  const r = seed ? mix(hash32(seed + ":" + q.id)) / 4294967296 : Math.random();
+  const r = seed ? mix32(hash32(seed + ":" + q.id)) / 4294967296 : Math.random();
   let pool, x;
   if (!code.length || !other.length) { pool = vs; x = r; }
   else if (r < CODE_FIRST_RATE) { pool = code; x = r / CODE_FIRST_RATE; }
@@ -620,12 +619,17 @@ function withVariant(q, seed) {
   if (v.tts) out.tts = v.tts; else delete out.tts;
   return out;
 }
+// hash32 は似た文字列どうしで値が近くなるので、乱数として使うときは混ぜる（hash32 自体は 2026-11-27 までの今日の10問の選び方に使うので変えない）
+function mix32(h) { h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 13; h = Math.imul(h, 0xc2b2ae35); h ^= h >>> 16; return h >>> 0; }
 function hash32(str) { let h = 0x811c9dc5; for (const ch of str) { h ^= ch.codePointAt(0); h = Math.imul(h, 16777619) >>> 0; } return h; }
 // 日付と問題IDのハッシュが小さい順に10問。全員が同じ10問になる（問題が増えても大半は変わらない）
 function dailyQuestions(key, mode = "all") {
   const pool = window.QUESTIONS.filter(GENRE_FILTERS[mode][1]);
   const salt = mode === "all" ? "" : mode + "|";
-  return pool.map((q) => ({ q, h: hash32(salt + key + "|" + q.id) })).sort((a, b) => a.h - b.h).slice(0, DAILY_COUNT).map((x) => x.q);
+  // 2026-11-28 からは出やすさ（q.weight）を反映し、ハッシュも混ぜて偏りをなくす（その日の途中で10問が変わらないよう、27日までは従来のまま）
+  const useW = key >= "2026-11-28", wOf = (q) => (mode === "stock" ? q.weight || 1 : 1); // 出やすさは株式版だけ
+  const score = (q, h) => (useW ? -Math.log(1 - (mix32(h) + 0.5) / 4294967296) / wOf(q) : h);
+  return pool.map((q) => ({ q, h: score(q, hash32(salt + key + "|" + q.id)) })).sort((a, b) => a.h - b.h).slice(0, DAILY_COUNT).map((x) => x.q);
 }
 const dailyStates = {};
 const dailyState = (mode = "all") => (dailyStates[mode] ||= LS.get(DAILY_MODES[mode].ls, { streak: 0, best: 0, last: null, days: {} }));

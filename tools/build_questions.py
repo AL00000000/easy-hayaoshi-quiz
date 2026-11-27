@@ -1,9 +1,10 @@
 """data/*.txt（1行1問の短い書式）から questions3.js を作り、問題の不備を検査する。
-書式: ジャンル|問題文|答え|読み|別解;別解|読み上げ用文|もう一回;もう一回
+書式: ジャンル|問題文|答え|読み|別解;別解|読み上げ用文|もう一回;もう一回|出やすさ
   - 読みは省略可（答えがカナだけなら自動でひらがなにする）
   - 別解・読み上げ用文・もう一回は省略可。「もう一回」は惜しい答え（正解にはしないが、1回だけ答え直せる）。
     入力に答え・別解がまるごと含まれる場合（みずほ→みずほ銀行）は自動で「もう一回」になるので、それ以外の惜しい答えだけを書く。
   - 問題文を「◇」で区切ると、出し方が複数ある問題になる（出題のたびに1つを選ぶ。「証券コード」から始まる文は合わせて20%）
+  - 出やすさは数字（省略時1）。株式の大型株（日経平均の構成銘柄）は3にしてある
   - 問題を消すときは、行を消さずにジャンルを「削除」にする（番号がずれない）
   - 「元素記号Xx」は読み上げで自動的にアルファベット読みにする
 使い方: python tools/build_questions.py
@@ -55,8 +56,8 @@ def main():
             if len(parts) < 3:
                 problems.append(f"{base}:{ln} 列が足りない: {line}")
                 continue
-            parts += [""] * (7 - len(parts))
-            genre, text, answer, reading, accept, tts, retry = [p.strip() for p in parts[:7]]
+            parts += [""] * (8 - len(parts))
+            genre, text, answer, reading, accept, tts, retry, weight = [p.strip() for p in parts[:8]]
             if genre == "削除":
                 # 消した問題：行を残して番号だけ進める（後ろの問題のIDと記録がずれないように）
                 n += 1
@@ -78,6 +79,11 @@ def main():
                 q["variants"] = [{"text": x, **({"tts": tts_for(x)} if tts_for(x) else {})} for x in texts]
             if retry:
                 q["retry"] = [a for a in retry.split(";") if a]
+            if weight:
+                try:
+                    q["weight"] = float(weight)
+                except ValueError:
+                    problems.append(f"{base}:{ln} 出やすさが数字でない: {weight}")
             q["_where"] = f"{base}:{ln}"
             rows.append(q)
 
