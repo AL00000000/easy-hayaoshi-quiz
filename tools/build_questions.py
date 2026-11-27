@@ -1,7 +1,9 @@
 """data/*.txt（1行1問の短い書式）から questions3.js を作り、問題の不備を検査する。
-書式: ジャンル|問題文|答え|読み|別解;別解|読み上げ用文
+書式: ジャンル|問題文|答え|読み|別解;別解|読み上げ用文|もう一回;もう一回
   - 読みは省略可（答えがカナだけなら自動でひらがなにする）
-  - 別解・読み上げ用文は省略可。「元素記号Xx」は読み上げで自動的にアルファベット読みにする
+  - 別解・読み上げ用文・もう一回は省略可。「もう一回」は惜しい答え（正解にはしないが、1回だけ答え直せる）。
+    入力に答え・別解がまるごと含まれる場合（みずほ→みずほ銀行）は自動で「もう一回」になるので、それ以外の惜しい答えだけを書く。
+  - 「元素記号Xx」は読み上げで自動的にアルファベット読みにする
 使い方: python tools/build_questions.py
 """
 import glob, json, os, re, sys, unicodedata
@@ -51,8 +53,8 @@ def main():
             if len(parts) < 3:
                 problems.append(f"{base}:{ln} 列が足りない: {line}")
                 continue
-            parts += [""] * (6 - len(parts))
-            genre, text, answer, reading, accept, tts = [p.strip() for p in parts[:6]]
+            parts += [""] * (7 - len(parts))
+            genre, text, answer, reading, accept, tts, retry = [p.strip() for p in parts[:7]]
             if not reading:
                 reading = to_hira(re.sub(r"[・＝=\s]", "", answer))
             n += 1
@@ -61,6 +63,8 @@ def main():
             t = tts or tts_for(text)
             if t:
                 q["tts"] = t
+            if retry:
+                q["retry"] = [a for a in retry.split(";") if a]
             q["_where"] = f"{base}:{ln}"
             rows.append(q)
 
@@ -79,6 +83,10 @@ def main():
             a = norm(a)
             if len(a) >= 2 and a in t:
                 problems.append(f"{w} 答え「{a}」が問題文に入っている: {q['answer']}")
+        ok_forms = {norm(a) for a in (q["answer"], q["reading"], *q["accept"])}
+        for r in q.get("retry", []):
+            if norm(r) in ok_forms:
+                problems.append(f"{w} 「もう一回」に正解と同じ答えがある: {r}")
         if not q["text"].endswith("？"):
             problems.append(f"{w} 問題文が「？」で終わっていない")
 

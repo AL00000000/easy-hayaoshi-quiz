@@ -210,7 +210,7 @@ function answerPairs(q) {
   return out;
 }
 function inputVariants(s) {
-  const v = new Set([s, s.replace(/です$/, ""), s.replace(/^(こたえは|えーと|えっと)/, "")]);
+  const v = new Set([s, s.replace(/です$/, ""), s.replace(/^(こたえは|えーと|えっと)/, ""), s.replace(/^(株式会社|かぶしきがいしゃ)|(株式会社|かぶしきがいしゃ)$/, "")]);
   for (const x of [...v]) for (const suf of INPUT_SUFFIXES) if (x.length - suf.length >= 2 && x.endsWith(suf)) v.add(x.slice(0, -suf.length));
   return [...v].filter(Boolean);
 }
@@ -253,6 +253,18 @@ function judgeText(q, text) {
     if (lim && Math.abs(i.length - r.length) <= lim && editDistance(i, r) <= lim) return true;
   }
   return false;
+}
+// 「もう一回」：正解ではないが惜しい答え（1問につき1回だけ答え直せる）
+// 1) 問題ごとに登録した答え（q.retry）。ほかの問題の答えでもよい（ソフトバンクグループ←ソフトバンク）
+// 2) 入力に答え・読み・別解（2文字以上）がまるごと含まれる場合（みずほ←みずほ銀行）。ほかの問題の答えそのものは除く
+function isRetry(q, text) {
+  const raw = loose(text);
+  if (!raw) return false;
+  const inputs = inputVariants(raw);
+  const manual = (q.retry || []).map(loose);
+  if (inputs.some((i) => manual.includes(i))) return true;
+  const forms = [q.answer, q.reading, ...(q.accept || [])].map(loose).filter((f) => f.length >= 2);
+  return inputs.some((i) => !KNOWN_ANSWERS.has(i) && forms.some((f) => i.length > f.length && i.includes(f)));
 }
 const KANA_ROWS = ["あいうえお", "かきくけこ", "さしすせそ", "たちつてと", "なにぬねの", "はひふへほ", "まみむめも", "やゆよ", "らりるれろ", "わをん", "がぎぐげご", "ざじずぜぞ", "だぢづでど", "ばびぶべぼ", "ぱぴぷぺぽ"];
 const SMALL_PAIRS = { "ぁ": "あ", "ぃ": "い", "ぅ": "う", "ぇ": "え", "ぉ": "お", "ゃ": "や", "ゅ": "ゆ", "ょ": "よ", "っ": "つ" };
@@ -358,6 +370,7 @@ class Host {
     else if (m.t === "boo") this.onBoo(pid, m.qid, !!m.on);
     else if (m.t === "booReason") this.onBooReason(pid, m);
     else if (m.t === "pause") this.setPaused(!!m.on, pid);
+    else if (m.t === "retry") { const c = this.cur; if (this.inGame && c && !c.closed && c.rights.includes(pid) && !c.results[pid]) this.broadcast({ t: "retry", pid }); }
   }
   leave(pid) {
     this.conns.delete(pid);
@@ -544,6 +557,7 @@ const handlers = {
   right(m) { onRight(m); },
   noright() { const g = client.game; if (g && g.cur) { g.cur.myState = "noright"; if (g.settings.mode === 2) setStatus("回答枠がいっぱいでした。"); updateBuzz(); } },
   answered(m) { onAnswered(m); },
+  retry(m) { if (m.pid !== profile.id && client.game?.cur) setStatus(`${esc(nameOf(m.pid))}：<span class="result-ng">もう一回！</span>`); },
   reveal(m) { onReveal(m); },
   end(m) { onEnd(m); },
   pause(m) { onPause(m); },
@@ -1134,15 +1148,31 @@ function startVoiceAnswer() {
   $("#answer-area").innerHTML = `
     <div class="timer"><div id="tbar" style="width:100%"></div></div>
     <p class="muted">${SR ? "マイクに向かって答えを言ってください。認識された文字を確認して Enter で解答（直接書き換えもできます）。" : "このブラウザは音声認識に対応していません（Chrome / Edge で使えます）。答えを入力して Enter で解答してください。"}</p>
+    <div id="retry-msg"></div>
     <input type="text" id="voice-input" class="voice-text" style="width:100%" autocomplete="off">
     <div class="row" style="margin-top:8px"><button id="voice-ok">この答えで解答（Enter）</button>${SR ? `<button class="sub" id="voice-retry">言い直す</button>` : ""}</div>`;
   const inp = $("#voice-input");
   inp.focus();
-  const submit = () => submitAnswer(judgeText(c.q, inp.value), inp.value);
+  // timeUp のときは「もう一回」にしない（残り時間がないため）
+  const submit = (timeUp) => {
+    if (c.myState !== "answering") return;
+    const ok = judgeText(c.q, inp.value);
+    if (!ok && timeUp !== true && !c.retried && isRetry(c.q, inp.value)) {
+      c.retried = true;
+      Sound.wrong();
+      $("#retry-msg").innerHTML = `<span class="result-ng">もう一回！</span><span class="muted">（「${esc(inp.value)}」は惜しい。制限時間はそのまま）</span>`;
+      inp.value = "";
+      inp.focus();
+      if (SR) startRecognition(inp);
+      client.send({ t: "retry" });
+      return;
+    }
+    submitAnswer(ok, inp.value);
+  };
   inp.onkeydown = (e) => { if (client.paused) { e.preventDefault(); return; } if (e.key === "Enter" && !e.isComposing) { e.preventDefault(); submit(); } };
-  $("#voice-ok").onclick = submit;
+  $("#voice-ok").onclick = () => submit();
   if (SR) { $("#voice-retry").onclick = () => { inp.value = ""; startRecognition(inp); }; startRecognition(inp); }
-  startTimer(VOICE_MS, submit);
+  startTimer(VOICE_MS, () => submit(true));
 }
 function startRecognition(inp) {
   const c = client.game.cur;
