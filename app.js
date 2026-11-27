@@ -377,7 +377,7 @@ class Host {
     this.startPlayers = this.players.map((p) => ({ ...p }));
     const avg = this.players.reduce((a, p) => a + p.rating, 0) / this.players.length;
     this.roomRank = rankOf(avg);
-    this.qlist = this.daily ? dailyQuestions(this.daily) : pickQuestions(s.count, this.roomRank);
+    this.qlist = this.daily ? dailyQuestions(this.daily) : pickQuestions(s.count, this.roomRank, s.genre);
     this.scores = Object.fromEntries(this.players.map((p) => [p.id, 0]));
     this.log = [];
     this.gameId = rid();
@@ -469,13 +469,16 @@ class Host {
 
 const nameOfPlayer = (players, pid) => (players.find((p) => p.id === pid) || {}).name || "？";
 function defaultSettings() {
-  return Object.assign({ mode: 1, input: "choice", pct: 50, count: 10, tts: true, charMs: 120 }, LS.get("ehq.settings", {}));
+  return Object.assign({ mode: 1, input: "choice", pct: 50, count: 10, tts: true, charMs: 120, genre: "all" }, LS.get("ehq.settings", {}));
 }
 
 // 正答率の低い問題ほど高ランクの部屋で多く出す
-function pickQuestions(count, rank) {
+// ジャンルの絞り込み（"all" ならすべて）
+const GENRE_FILTERS = { all: ["すべて", () => true], pokemon: ["ポケモンだけ", (q) => q.genre === "ポケモン" || /ポケモン|ポケットモンスター/.test(q.text)] };
+function pickQuestions(count, rank, genre = "all") {
   const target = RANK_TARGET[rank];
-  const items = window.QUESTIONS.map((q) => {
+  const pool = window.QUESTIONS.filter((GENRE_FILTERS[genre] || GENRE_FILTERS.all)[1]);
+  const items = pool.map((q) => {
     const acc = accuracyFor(q.id, rank);
     const p = acc == null ? 0.6 : acc; // データがない問題は「やや易しい」とみなす
     let w = Math.exp(-((p - target) ** 2) / (2 * 0.2 ** 2)) + 0.05;
@@ -875,6 +878,7 @@ function renderLobby() {
         <option value="choice" ${s.input === "choice" ? "selected" : ""}>ひらがな4択</option>
         <option value="voice" ${s.input === "voice" ? "selected" : ""} ${s.mode === 2 ? "disabled" : ""}>音声入力${s.mode === 2 ? "（方式2では使えません）" : ""}</option>
       </select></label>
+    <label>ジャンル <select id="s-genre" ${dis}>${Object.entries(GENRE_FILTERS).map(([k, [l]]) => `<option value="${k}" ${(s.genre || "all") === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
     <label>問題数 <select id="s-count" ${dis}>${[5, 10, 15, 20].map((v) => `<option ${s.count === v ? "selected" : ""}>${v}</option>`).join("")}</select></label>
     <label>文字の速さ <select id="s-speed" ${dis}>${[[160, "ゆっくり"], [120, "ふつう"], [85, "はやい"]].map(([v, l]) => `<option value="${v}" ${s.charMs === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
     <label><input type="checkbox" id="s-tts" ${s.tts ? "checked" : ""} ${dis}> 問題文を音声で読み上げる</label>
@@ -889,11 +893,11 @@ function renderLobby() {
     const mode = Number($("#s-mode").value);
     let input = $("#s-input").value;
     if (mode === 2) input = "choice"; // 方式2は同時に複数人が答えるため音声入力は不可
-    const ns = { mode, input, pct: Number($("#s-pct").value), count: Number($("#s-count").value), charMs: Number($("#s-speed").value), tts: $("#s-tts").checked };
+    const ns = { mode, input, pct: Number($("#s-pct").value), count: Number($("#s-count").value), charMs: Number($("#s-speed").value), tts: $("#s-tts").checked, genre: $("#s-genre").value };
     LS.set("ehq.settings", ns);
     client.host.setSettings(ns);
   };
-  for (const id of ["s-mode", "s-pct", "s-input", "s-count", "s-speed", "s-tts"]) $("#" + id).onchange = read;
+  for (const id of ["s-mode", "s-pct", "s-input", "s-count", "s-speed", "s-tts", "s-genre"]) $("#" + id).onchange = read;
   $("#go").onclick = () => client.host.start();
 }
 
