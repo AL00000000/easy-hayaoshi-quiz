@@ -270,6 +270,7 @@ function isRetry(q, text) {
   const forms = [q.answer, q.reading, ...(q.accept || [])].map(loose).filter((f) => f.length >= 2);
   if (inputs.some((i) => !KNOWN_ANSWERS.has(i) && forms.some((f) => i.length > f.length && i.includes(f)))) return true;
   // 「A、B、CのうちXはどれ？」の選択肢を答えたときは、ただの不正解（もう一回にはしない）
+  if (q.inText) return false; // 答えが文中にあるのが仕掛けの問題（文中の言葉を答えても「もう一回」にしない）
   const qt = [q.text, ...(q.variants || []).map((v) => v.text)].filter((t) => !(t.includes("のうち") && t.endsWith("どれ？"))).map(loose).join("／");
   return inputs.some((i) => i.length >= 2 && qt.includes(i));
 }

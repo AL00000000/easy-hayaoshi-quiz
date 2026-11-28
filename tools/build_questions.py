@@ -1,5 +1,5 @@
 """data/*.txt（1行1問の短い書式）から questions3.js を作り、問題の不備を検査する。
-書式: ジャンル|問題文|答え|読み|別解;別解|読み上げ用文|もう一回;もう一回|出やすさ
+書式: ジャンル|問題文|答え|読み|別解;別解|読み上げ用文|もう一回;もう一回|出やすさ|印|もう一回;もう一回|出やすさ
   - 読みは省略可（答えがカナだけなら自動でひらがなにする）
   - 別解・読み上げ用文・もう一回は省略可。「もう一回」は惜しい答え（正解にはしないが、1回だけ答え直せる）。
     入力に答え・別解がまるごと含まれる場合（みずほ→みずほ銀行）は自動で「もう一回」になるので、それ以外の惜しい答えだけを書く。
@@ -81,8 +81,9 @@ def main():
             if len(parts) < 3:
                 problems.append(f"{base}:{ln} 列が足りない: {line}")
                 continue
-            parts += [""] * (8 - len(parts))
-            genre, text, answer, reading, accept, tts, retry, weight = [p.strip() for p in parts[:8]]
+            parts += [""] * (9 - len(parts))
+            # 9番目の欄は印（いまは「文中可」だけ：答えが問題文の中にあるのが仕掛けの問題。例：太郎の父親の5人の子ども）
+            genre, text, answer, reading, accept, tts, retry, weight, flags = [p.strip() for p in parts[:9]]
             if genre == "削除":
                 # 消した問題：行を残して番号だけ進める（後ろの問題のIDと記録がずれないように）
                 n += 1
@@ -126,6 +127,8 @@ def main():
                     problems.append(f"{base}:{ln} 出やすさが数字でない: {weight}")
             if dates.get(ln):
                 q["added"] = dates[ln]  # この行を最後に変えた日（新問モード用）
+            if "文中可" in flags:
+                q["inText"] = True
             q["_where"] = f"{base}:{ln}"
             rows.append(q)
 
@@ -133,20 +136,22 @@ def main():
     seen = {norm(q["answer"]): q["id"] for q in old}
     # 同じ読みでも別のものを指す答え（果物のミカンと、ジムリーダーのミカン）は重複として扱わない
     DUP_OK = {"みかん"}
-    seen_stats = {}  # 種族値の問題は、ほかの問題と答えが重なってよい（種族値の問題どうしでは重ならないようにする）
+    seen_stats = {}
+    seen_moves = {}  # 種族値の問題は、ほかの問題と答えが重なってよい（種族値の問題どうしでは重ならないようにする）
     for q in rows:
         w = q["_where"]
         if not re.fullmatch(r"[ぁ-んー]+", q["reading"]):
             problems.append(f"{w} 読みがひらがなでない: {q['reading']} ({q['answer']})")
         na = norm(q["answer"])
-        sd = seen_stats if q.get("sub") == "種族値" else seen
+        # 種族値・わざ・道具の問題は、ほかのジャンルと答えが重なってよい（じしん＝地震、ふうせん＝風船など）。それぞれの中では重ならないようにする
+        sd = seen_stats if q.get("sub") == "種族値" else seen_moves if q.get("sub") in ("わざ", "道具") else seen
         if na in sd and na not in DUP_OK:
             problems.append(f"{w} 答えが重複: {q['answer']}（{sd[na]}）")
         sd[na] = q["id"]
         for vt in [v["text"] for v in q.get("variants", [])] or [q["text"]]:
             t = norm(vt)
             # 「A、B、CのうちXはどれ？」のように、選択肢を並べる問題は答えが文中にあってよい
-            choice_style = "のうち" in vt and vt.endswith("どれ？")
+            choice_style = ("のうち" in vt and vt.endswith("どれ？")) or q.get("inText")
             for a in {q["answer"], q["reading"], *q["accept"]}:
                 a = norm(a)
                 if len(a) >= 2 and a in t and not choice_style:
