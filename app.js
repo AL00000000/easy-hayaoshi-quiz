@@ -507,6 +507,17 @@ const STATS_MIX_SHARE = 0.3;
 // 文字の代わりに「情報1つ」を1段階として流す（合計＋6つで7段階）。押した位置の記録も7段階のどこで押したかになる
 const STAT_KEYS = ["H", "A", "B", "C", "D", "S"];
 const STAT_SAY = ["エイチ", "エー", "ビー", "シー", "ディー", "エス"];
+// 数字をかなの読みにする（読み上げが「110」を「ひゃくとおばん」と読むことがあるため。本人の指摘・2026-11-28）。0〜9999
+function numKana(n) {
+  n = Math.floor(n);
+  if (n === 0) return "ぜろ";
+  const one = ["", "いち", "に", "さん", "よん", "ご", "ろく", "なな", "はち", "きゅう"];
+  const ten = ["", "じゅう", "にじゅう", "さんじゅう", "よんじゅう", "ごじゅう", "ろくじゅう", "ななじゅう", "はちじゅう", "きゅうじゅう"];
+  const hun = ["", "ひゃく", "にひゃく", "さんびゃく", "よんひゃく", "ごひゃく", "ろっぴゃく", "ななひゃく", "はっぴゃく", "きゅうひゃく"];
+  const tho = ["", "せん", "にせん", "さんぜん", "よんせん", "ごせん", "ろくせん", "ななせん", "はっせん", "きゅうせん"];
+  const d = String(n % 10000).padStart(4, "0").split("").map(Number);
+  return tho[d[0]] + hun[d[1]] + ten[d[2]] + one[d[3]];
+}
 const isStatShow = (q) => isStatQ(q) && Array.isArray(q.bs) && q.bs.length === 6;
 const statStepMs = (charMs) => charMs * 12; // ふつう（120ms）で1.44秒ごと
 const statSteps = (q) => [`合計種族値${q.bs.reduce((a, b) => a + b, 0)}`, ...q.bs.map((v, i) => STAT_KEYS[i] + v)];
@@ -1151,7 +1162,7 @@ function streamTick(tok) {
   if (stat) {
     // 1つ出すごとに短い音を鳴らし、その情報だけを読み上げる
     Sound.tone(c.shown === 1 ? 660 : 880, 0, 0.09, { type: "square", vol: 0.06 });
-    const i = c.shown - 1, say = i === 0 ? c.chars[0] : STAT_SAY[i - 1] + c.q.bs[i - 1];
+    const i = c.shown - 1, say = i === 0 ? "ごうけいしゅぞくち、" + numKana(c.q.bs.reduce((a, b) => a + b, 0)) : STAT_SAY[i - 1] + "、" + numKana(c.q.bs[i - 1]);
     speak({ text: say, tts: say + (c.shown === c.chars.length ? "。このポケモンは何でしょう？" : "") }, client.game.settings.tts);
   }
   if (c.shown < c.chars.length) c.streamTimer = new PTimer(client.timers, () => streamTick(tok), stat ? statStepMs(client.game.settings.charMs) : client.game.settings.charMs);
