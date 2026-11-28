@@ -868,7 +868,7 @@ function dailyShareText(key, recs, score, mode = "all") {
   const ps = recs.filter((r) => r.ok && r.p != null).map((r) => r.p);
   const avg = ps.length ? Math.round((ps.reduce((a, b) => a + b, 0) / ps.length) * 100) : null;
   const [, mm, dd] = key.split("-");
-  return [`簡単早押しクイズ ${DAILY_MODES[mode].label} ${Number(mm)}/${Number(dd)}`, `${row} ${score}/${DAILY_COUNT}`, avg != null ? `⚡正解した問題は平均${avg}%で押した` : null, currentStreak(mode) > 1 ? `🔥${currentStreak(mode)}日連続` : null, EDITION_URL[mode]].filter(Boolean).join("\n");
+  return [`かんたん早押しクイズ ${DAILY_MODES[mode].label} ${Number(mm)}/${Number(dd)}`, `${row} ${score}/${DAILY_COUNT}`, avg != null ? `⚡正解した問題は平均${avg}%で押した` : null, currentStreak(mode) > 1 ? `🔥${currentStreak(mode)}日連続` : null, EDITION_URL[mode]].filter(Boolean).join("\n");
 }
 function dailyResultHTML(m) {
   const d = client.daily, wasOfficial = d.official;
