@@ -398,7 +398,7 @@ class Host {
     this.startPlayers = this.players.map((p) => ({ ...p }));
     const avg = this.players.reduce((a, p) => a + p.rating, 0) / this.players.length;
     this.roomRank = rankOf(avg);
-    this.qlist = this.daily ? dailyQuestions(this.daily.key, this.daily.mode) : !this.online && newModeDays() ? pickNewQuestions(s.count, s.genre, s.pstats) : pickQuestions(s.count, this.roomRank, s.genre, s.pstats);
+    this.qlist = this.daily ? dailyQuestions(this.daily.key, this.daily.mode) : !this.online && newModeDays() ? pickNewQuestions(s.count, s.genre, s) : pickQuestions(s.count, this.roomRank, s.genre, s);
     this.scores = Object.fromEntries(this.players.map((p) => [p.id, 0]));
     this.log = [];
     this.gameId = rid();
@@ -490,7 +490,7 @@ class Host {
 
 const nameOfPlayer = (players, pid) => (players.find((p) => p.id === pid) || {}).name || "？";
 function defaultSettings() {
-  const s = Object.assign({ mode: 1, input: "choice", pct: 50, count: 10, tts: true, charMs: 120, genre: "all", pstats: "off" }, LS.get("ehq.settings", {}));
+  const s = Object.assign({ mode: 1, input: "choice", pct: 50, count: 10, tts: true, charMs: 120, genre: "all", pstats: "off", pfocus: "normal" }, LS.get("ehq.settings", {}));
   if (s.pstats === true) s.pstats = "mix"; else if (s.pstats === false) s.pstats = "off";
   if (EDITION !== "all") s.genre = EDITION; // ポケモン版・株式版は常にそのジャンルだけ
   return s;
@@ -526,8 +526,15 @@ const statSteps = (q) => [`合計種族値${q.bs.reduce((a, b) => a + b, 0)}`, .
 const qUnits = (q) => (isStatShow(q) ? statSteps(q) : [...q.text]);
 // 2026-11-28 に足したポケモンの問題（08_pokemon の113問目以降）は、その日の今日の10問を途中で変えないように 11/29 から入れる
 const addedLater = (q, key) => key < "2026-11-29" && /^08_pokemon-(\d+)$/.test(q.id) && Number(q.id.slice(11)) > 112;
-function genrePool(genre = "all", stats = "off") {
-  const base = window.QUESTIONS.filter((GENRE_FILTERS[genre] || GENRE_FILTERS.all)[1]);
+// わざ・道具の問題（data/08_pokemon_moves.txt）は対戦寄りなので、本人が一覧を確認するまでは「出題の範囲：わざ・道具だけ」のときだけ出す（2026-11-28）
+const isMoveItemQ = (q) => q.sub === "わざ" || q.sub === "道具";
+const FOCUS_MODES = [["normal", "ふつう"], ["moves", "わざ・道具だけ"]];
+// stats は種族値の設定（文字）か、設定そのもの（{ pstats, pfocus }）
+function genrePool(genre = "all", opt = "off") {
+  const o = typeof opt === "string" ? { pstats: opt } : opt || {}, stats = o.pstats;
+  const base0 = window.QUESTIONS.filter((GENRE_FILTERS[genre] || GENRE_FILTERS.all)[1]);
+  if (genre === "pokemon" && o.pfocus === "moves") return base0.filter(isMoveItemQ);
+  const base = base0.filter((q) => !isMoveItemQ(q));
   if (genre !== "pokemon" || !stats || stats === "off") return base.filter((q) => !isStatQ(q));
   return stats === "only" ? base.filter(isStatQ) : base;
 }
@@ -548,7 +555,7 @@ function cycleNewMode() {
   if (!client.game || client.game.over) renderHome();
   alert(d ? `新問モード：オン（直近${d}日に足した・直した問題だけ。ひとり練習のみ）` : "新問モード：オフ");
 }
-function newPool(genre = "all", stats = defaultSettings().pstats) {
+function newPool(genre = "all", stats = defaultSettings()) {
   const since = todayKey(-(newModeDays() - 1));
   return genrePool(genre, stats).filter((q) => q.added && q.added >= since);
 }
@@ -569,7 +576,8 @@ document.addEventListener("click", (e) => {
 function pickQuestions(count, rank, genre = "all", stats = "off") {
   const target = RANK_TARGET[rank];
   const pool = genrePool(genre, stats);
-  const sw = stats === "mix" ? statsWeight(pool) : 1;
+  const so = typeof stats === "string" ? { pstats: stats } : stats || {};
+  const sw = so.pstats === "mix" && so.pfocus !== "moves" ? statsWeight(pool) : 1;
   const items = pool.map((q) => {
     const acc = accuracyFor(q.id, rank);
     const p = acc == null ? 0.6 : acc; // データがない問題は「やや易しい」とみなす
@@ -1078,7 +1086,8 @@ function renderLobby() {
         <option value="voice" ${s.input === "voice" ? "selected" : ""} ${s.mode === 2 ? "disabled" : ""}>音声入力${s.mode === 2 ? "（方式2では使えません）" : ""}</option>
       </select></label>
     <label ${EDITION !== "all" ? 'style="display:none"' : ""}>ジャンル <select id="s-genre" ${dis}>${Object.entries(GENRE_FILTERS).map(([k, [l]]) => `<option value="${k}" ${(s.genre || "all") === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
-    <label id="pstats-row" ${EDITION === "pokemon" || (EDITION === "all" && s.genre === "pokemon") ? "" : 'style="display:none"'}>種族値の問題（合計とHABCDSから答える） <select id="s-pstats" ${dis}>${STATS_MODES.map(([v, l]) => `<option value="${v}" ${(s.pstats || "off") === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+    <label id="pfocus-row" ${EDITION === "pokemon" || (EDITION === "all" && s.genre === "pokemon") ? "" : 'style="display:none"'}>出題の範囲 <select id="s-pfocus" ${dis}>${FOCUS_MODES.map(([v, l]) => `<option value="${v}" ${(s.pfocus || "normal") === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+    <label id="pstats-row" ${(EDITION === "pokemon" || (EDITION === "all" && s.genre === "pokemon")) && s.pfocus !== "moves" ? "" : 'style="display:none"'}>種族値の問題（合計とHABCDSから答える） <select id="s-pstats" ${dis}>${STATS_MODES.map(([v, l]) => `<option value="${v}" ${(s.pstats || "off") === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
     <label>問題数 <select id="s-count" ${dis}>${[5, 10, 15, 20].map((v) => `<option ${s.count === v ? "selected" : ""}>${v}</option>`).join("")}</select></label>
     <label>文字の速さ <select id="s-speed" ${dis}>${[[160, "ゆっくり"], [120, "ふつう"], [85, "はやい"]].map(([v, l]) => `<option value="${v}" ${s.charMs === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
     <label><input type="checkbox" id="s-tts" ${s.tts ? "checked" : ""} ${dis}> 問題文を音声で読み上げる</label>
@@ -1093,13 +1102,15 @@ function renderLobby() {
     const mode = Number($("#s-mode").value);
     let input = $("#s-input").value;
     if (mode === 2) input = "choice"; // 方式2は同時に複数人が答えるため音声入力は不可
-    $("#pstats-row").style.display = EDITION === "pokemon" || (EDITION === "all" && $("#s-genre").value === "pokemon") ? "" : "none";
-    const ns = { mode, input, pct: Number($("#s-pct").value), count: Number($("#s-count").value), charMs: Number($("#s-speed").value), tts: $("#s-tts").checked, pstats: $("#s-pstats").value, genre: EDITION !== "all" ? EDITION : $("#s-genre").value };
+    const pk = EDITION === "pokemon" || (EDITION === "all" && $("#s-genre").value === "pokemon");
+    $("#pfocus-row").style.display = pk ? "" : "none";
+    $("#pstats-row").style.display = pk && $("#s-pfocus").value !== "moves" ? "" : "none"; // わざ・道具だけのときは種族値の設定は使わない
+    const ns = { mode, input, pct: Number($("#s-pct").value), count: Number($("#s-count").value), charMs: Number($("#s-speed").value), tts: $("#s-tts").checked, pstats: $("#s-pstats").value, pfocus: $("#s-pfocus").value, genre: EDITION !== "all" ? EDITION : $("#s-genre").value };
     if (EDITION !== "all") { LS.set("ehq.settings", { ...ns, genre: LS.get("ehq.settings", {}).genre || "all" }); client.host.setSettings(ns); return; }
     LS.set("ehq.settings", ns);
     client.host.setSettings(ns);
   };
-  for (const id of ["s-mode", "s-pct", "s-input", "s-count", "s-speed", "s-tts", "s-genre", "s-pstats"]) $("#" + id).onchange = read;
+  for (const id of ["s-mode", "s-pct", "s-input", "s-count", "s-speed", "s-tts", "s-genre", "s-pstats", "s-pfocus"]) $("#" + id).onchange = read;
   $("#go").onclick = () => client.host.start();
 }
 
