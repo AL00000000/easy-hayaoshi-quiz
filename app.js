@@ -570,10 +570,10 @@ function statsWeight(pool) {
   return n && m ? (STATS_MIX_SHARE / (1 - STATS_MIX_SHARE)) * (m / n) : 1;
 }
 // ----- 新問モード（隠しコマンド。問題を足した・直したときの確認用）-----
-// Alt+N（スマホはヘッダーの名前の欄を5回続けてタップ）で 切 → 直近1日 → 直近3日 → 直近7日 → 切 と切り替わる。
+// Alt+N（スマホはヘッダーの名前の欄を5回続けてタップ）で オン（直近1日）とオフが切り替わる（本人の指定・2026-11-28）。
 // オンのとき、ひとり練習では最近足した・直した問題（q.added）だけを新しい順に出す。部屋と今日の10問には効かない
-const NEW_MODE_STEPS = [0, 1, 3, 7];
-const newModeDays = () => Number(LS.get("ehq.newmode", 0)) || 0;
+const NEW_MODE_STEPS = [0, 1];
+const newModeDays = () => (Number(LS.get("ehq.newmode", 0)) ? 1 : 0); // 以前の3日・7日の設定が残っていても直近1日として扱う
 function cycleNewMode() {
   const i = NEW_MODE_STEPS.indexOf(newModeDays());
   const d = NEW_MODE_STEPS[(i + 1) % NEW_MODE_STEPS.length];
