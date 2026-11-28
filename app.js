@@ -398,6 +398,7 @@ class Host {
     this.startPlayers = this.players.map((p) => ({ ...p }));
     const avg = this.players.reduce((a, p) => a + p.rating, 0) / this.players.length;
     this.roomRank = rankOf(avg);
+    if (EDITION === "pokemon") s.pfocus = movesMode() ? "moves" : "normal"; // 部屋を立てたあとに切り替えても効くように
     this.qlist = this.daily ? dailyQuestions(this.daily.key, this.daily.mode) : !this.online && newModeDays() ? pickNewQuestions(s.count, s.genre, s) : pickQuestions(s.count, this.roomRank, s.genre, s);
     this.scores = Object.fromEntries(this.players.map((p) => [p.id, 0]));
     this.log = [];
@@ -492,13 +493,15 @@ const nameOfPlayer = (players, pid) => (players.find((p) => p.id === pid) || {})
 function defaultSettings() {
   const s = Object.assign({ mode: 1, input: "choice", pct: 50, count: 10, tts: true, charMs: 120, genre: "all", pstats: "off", pfocus: "normal" }, LS.get("ehq.settings", {}));
   if (s.pstats === true) s.pstats = "mix"; else if (s.pstats === false) s.pstats = "off";
+  s.pfocus = movesMode() ? "moves" : "normal"; // 出題の範囲は隠しコマンドの「わざ・道具モード」で決める（設定画面には出さない）
   if (EDITION !== "all") s.genre = EDITION; // ポケモン版・株式版は常にそのジャンルだけ
   return s;
 }
 
 // 正答率の低い問題ほど高ランクの部屋で多く出す
 // ジャンルの絞り込み（"all" ならすべて）
-const GENRE_FILTERS = { all: ["すべて", () => true], pokemon: ["ポケモンだけ", (q) => q.genre === "ポケモン" || /ポケモン|ポケットモンスター/.test(q.text)], stock: ["株式だけ", (q) => q.genre === "株式"] };
+// 全体版（すべて）には株式の問題を出さない（証券コード・PERなどは一般向けにはマニアックすぎるため。本人の要望・2026-11-28）。株式の問題は株式版（/stock/）だけで出す
+const GENRE_FILTERS = { all: ["すべて", (q) => q.genre !== "株式"], pokemon: ["ポケモンだけ", (q) => q.genre === "ポケモン" || /ポケモン|ポケットモンスター/.test(q.text)], stock: ["株式だけ", (q) => q.genre === "株式"] };
 // 種族値の問題（ポケモン版の細かいジャンル「種族値」）は、ポケモンだけを出すときに設定で選ぶ（本人の要望・2026-11-28）。
 //   off＝出さない（既定。本人の指定）／mix＝まぜる（数が多いので、出題の約3割になるように重みを下げる）／only＝種族値だけ
 // 全体版の「すべて」と今日の10問には出さない（全員が同じ問題を解く今日の10問を、設定で変えないため）
@@ -528,7 +531,28 @@ const qUnits = (q) => (isStatShow(q) ? statSteps(q) : [...q.text]);
 const addedLater = (q, key) => key < "2026-11-29" && /^08_pokemon-(\d+)$/.test(q.id) && Number(q.id.slice(11)) > 112;
 // わざ・道具の問題（data/08_pokemon_moves.txt）は対戦寄りなので、本人が一覧を確認するまでは「出題の範囲：わざ・道具だけ」のときだけ出す（2026-11-28）
 const isMoveItemQ = (q) => q.sub === "わざ" || q.sub === "道具";
-const FOCUS_MODES = [["normal", "ふつう"], ["moves", "わざ・道具だけ"]];
+// ----- わざ・道具モード（隠しコマンド。ポケモン版だけ。本人の要望・2026-11-28）-----
+// Alt+W（スマホはトップ画面で左上のタイトルを5回続けてタップ）でオン／オフ。
+// オンのとき、ひとり練習と部屋（立てた人の画面の状態で決まる）ではわざ・道具の問題だけを出す。今日の10問には効かない。
+// オンの間はヘッダーの色と札が変わり、切り替えた瞬間には画面の真ん中に大きく出す
+const movesMode = () => EDITION === "pokemon" && LS.get("ehq.movesmode", false) === true;
+function applyMovesModeLook() { document.body.classList.toggle("moves-mode", movesMode()); }
+function showModeToast(html) {
+  const el = document.createElement("div");
+  el.className = "mode-toast";
+  el.innerHTML = html;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 2200);
+}
+function toggleMovesMode() {
+  if (EDITION !== "pokemon") return;
+  LS.set("ehq.movesmode", !movesMode());
+  applyMovesModeLook();
+  Sound.tone(movesMode() ? 660 : 440, 0, 0.12, { type: "square", vol: 0.08 });
+  Sound.tone(movesMode() ? 990 : 330, 0.12, 0.18, { type: "square", vol: 0.08 });
+  showModeToast(movesMode() ? `⚔ わざ・道具モード <b>ON</b><small>わざ・道具の問題（${genrePool("pokemon", { pfocus: "moves" }).length}問）だけが出ます</small>` : `わざ・道具モード <b>OFF</b><small>ふつうの出題に戻りました</small>`);
+  if ($("#home-moves") || $("#daily-" + EDITION)) renderHome(); // トップ画面にいるときだけ描き直す（部屋の設定画面などはそのまま）
+}
 // stats は種族値の設定（文字）か、設定そのもの（{ pstats, pfocus }）
 function genrePool(genre = "all", opt = "off") {
   const o = typeof opt === "string" ? { pstats: opt } : opt || {}, stats = o.pstats;
@@ -565,6 +589,14 @@ function pickNewQuestions(count, genre, stats) {
   return shuffle(pool).sort((a, b) => (a.added < b.added ? 1 : a.added > b.added ? -1 : 0)).slice(0, count);
 }
 document.addEventListener("keydown", (e) => { if (e.altKey && !e.ctrlKey && !e.shiftKey && e.code === "KeyN") { e.preventDefault(); cycleNewMode(); } });
+document.addEventListener("keydown", (e) => { if (e.altKey && !e.ctrlKey && !e.shiftKey && e.code === "KeyW") { e.preventDefault(); toggleMovesMode(); } });
+let movesModeTaps = [];
+document.addEventListener("click", (e) => {
+  if (!e.target.closest || !e.target.closest("#logo") || !$("#daily-" + EDITION)) return; // トップ画面でだけ数える
+  const now = Date.now();
+  movesModeTaps = movesModeTaps.filter((t) => now - t < 2500).concat(now);
+  if (movesModeTaps.length >= 5) { movesModeTaps = []; toggleMovesMode(); }
+});
 let newModeTaps = [];
 document.addEventListener("click", (e) => {
   if (!e.target.closest || !e.target.closest("#me-box")) return;
@@ -706,7 +738,8 @@ function mix32(h) { h ^= h >>> 16; h = Math.imul(h, 0x85ebca6b); h ^= h >>> 13; 
 function hash32(str) { let h = 0x811c9dc5; for (const ch of str) { h ^= ch.codePointAt(0); h = Math.imul(h, 16777619) >>> 0; } return h; }
 // 日付と問題IDのハッシュが小さい順に10問。全員が同じ10問になる（問題が増えても大半は変わらない）
 function dailyQuestions(key, mode = "all") {
-  const pool = genrePool(mode, "off").filter((q) => !addedLater(q, key));
+  // その日に足した・直した問題（q.added がその日）は、その日の10問には入れない（問題を足すたびに、その日の10問が途中で入れ替わらないように。2026-11-29から）
+  const pool = genrePool(mode, "off").filter((q) => !addedLater(q, key) && !(key >= "2026-11-29" && q.added && q.added >= key));
   const salt = mode === "all" ? "" : mode + "|";
   // 2026-11-28 からは出やすさ（q.weight）を反映し、ハッシュも混ぜて偏りをなくす（その日の途中で10問が変わらないよう、27日までは従来のまま）
   const useW = key >= "2026-11-28", wOf = (q) => (mode === "stock" ? q.weight || 1 : 1); // 出やすさは株式版だけ
@@ -880,7 +913,7 @@ function renderHome() {
     return `<div class="row daily-row"><button id="daily-${mode}">${done ? "もう一度（練習）" : "挑戦する"}</button>${done ? `<span>今日：<b>${today.score}</b> / ${DAILY_COUNT}</span>` : ""}${st ? `<span>🔥${st}日連続</span>` : ""}</div>`;
   };
   const nm = newModeDays();
-  app.innerHTML = `${nm ? `<div class="card" style="border:2px dashed #e67e22"><b>🧪 新問モード</b>（直近${nm}日に足した・直した問題 ${newPool(EDITION).length}問。ひとり練習だけ。Alt+N で切り替え）</div>` : ""}
+  app.innerHTML = `${movesMode() ? `<div class="card moves-banner" id="home-moves"><b>⚔ わざ・道具モード</b>　ひとり練習と部屋では、わざ・道具の問題（${genrePool("pokemon", { pfocus: "moves" }).length}問）だけが出ます。<span class="muted">今日の10問はふつうのまま。戻すときは Alt+W（スマホは左上のタイトルを5回タップ）</span></div>` : ""}${nm ? `<div class="card" style="border:2px dashed #e67e22"><b>🧪 新問モード</b>（直近${nm}日に足した・直した問題 ${newPool(EDITION).length}問。ひとり練習だけ。Alt+N で切り替え）</div>` : ""}
   <div class="card daily-card">
     <h2>今日の10問 <span class="muted">${todayKey().slice(5).replace("-", "/")}</span></h2>
     <p class="muted">全員共通の10問。ほかの人の記録（ゴースト）と早押しで勝負できます。</p>
@@ -1086,8 +1119,7 @@ function renderLobby() {
         <option value="voice" ${s.input === "voice" ? "selected" : ""} ${s.mode === 2 ? "disabled" : ""}>音声入力${s.mode === 2 ? "（方式2では使えません）" : ""}</option>
       </select></label>
     <label ${EDITION !== "all" ? 'style="display:none"' : ""}>ジャンル <select id="s-genre" ${dis}>${Object.entries(GENRE_FILTERS).map(([k, [l]]) => `<option value="${k}" ${(s.genre || "all") === k ? "selected" : ""}>${l}</option>`).join("")}</select></label>
-    <label id="pfocus-row" ${EDITION === "pokemon" || (EDITION === "all" && s.genre === "pokemon") ? "" : 'style="display:none"'}>出題の範囲 <select id="s-pfocus" ${dis}>${FOCUS_MODES.map(([v, l]) => `<option value="${v}" ${(s.pfocus || "normal") === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
-    <label id="pstats-row" ${(EDITION === "pokemon" || (EDITION === "all" && s.genre === "pokemon")) && s.pfocus !== "moves" ? "" : 'style="display:none"'}>種族値の問題（合計とHABCDSから答える） <select id="s-pstats" ${dis}>${STATS_MODES.map(([v, l]) => `<option value="${v}" ${(s.pstats || "off") === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
+    <label id="pstats-row" ${(EDITION === "pokemon" || (EDITION === "all" && s.genre === "pokemon")) && !movesMode() ? "" : 'style="display:none"'}>種族値の問題（合計とHABCDSから答える） <select id="s-pstats" ${dis}>${STATS_MODES.map(([v, l]) => `<option value="${v}" ${(s.pstats || "off") === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
     <label>問題数 <select id="s-count" ${dis}>${[5, 10, 15, 20].map((v) => `<option ${s.count === v ? "selected" : ""}>${v}</option>`).join("")}</select></label>
     <label>文字の速さ <select id="s-speed" ${dis}>${[[160, "ゆっくり"], [120, "ふつう"], [85, "はやい"]].map(([v, l]) => `<option value="${v}" ${s.charMs === v ? "selected" : ""}>${l}</option>`).join("")}</select></label>
     <label><input type="checkbox" id="s-tts" ${s.tts ? "checked" : ""} ${dis}> 問題文を音声で読み上げる</label>
@@ -1103,14 +1135,13 @@ function renderLobby() {
     let input = $("#s-input").value;
     if (mode === 2) input = "choice"; // 方式2は同時に複数人が答えるため音声入力は不可
     const pk = EDITION === "pokemon" || (EDITION === "all" && $("#s-genre").value === "pokemon");
-    $("#pfocus-row").style.display = pk ? "" : "none";
-    $("#pstats-row").style.display = pk && $("#s-pfocus").value !== "moves" ? "" : "none"; // わざ・道具だけのときは種族値の設定は使わない
-    const ns = { mode, input, pct: Number($("#s-pct").value), count: Number($("#s-count").value), charMs: Number($("#s-speed").value), tts: $("#s-tts").checked, pstats: $("#s-pstats").value, pfocus: $("#s-pfocus").value, genre: EDITION !== "all" ? EDITION : $("#s-genre").value };
+    $("#pstats-row").style.display = pk && !movesMode() ? "" : "none"; // わざ・道具モードのときは種族値の設定は使わない
+    const ns = { mode, input, pct: Number($("#s-pct").value), count: Number($("#s-count").value), charMs: Number($("#s-speed").value), tts: $("#s-tts").checked, pstats: $("#s-pstats").value, pfocus: movesMode() ? "moves" : "normal", genre: EDITION !== "all" ? EDITION : $("#s-genre").value };
     if (EDITION !== "all") { LS.set("ehq.settings", { ...ns, genre: LS.get("ehq.settings", {}).genre || "all" }); client.host.setSettings(ns); return; }
     LS.set("ehq.settings", ns);
     client.host.setSettings(ns);
   };
-  for (const id of ["s-mode", "s-pct", "s-input", "s-count", "s-speed", "s-tts", "s-genre", "s-pstats", "s-pfocus"]) $("#" + id).onchange = read;
+  for (const id of ["s-mode", "s-pct", "s-input", "s-count", "s-speed", "s-tts", "s-genre", "s-pstats"]) $("#" + id).onchange = read;
   $("#go").onclick = () => client.host.start();
 }
 
@@ -1612,4 +1643,5 @@ document.addEventListener("keydown", (e) => {
 });
 
 drawMe();
+applyMovesModeLook();
 renderHome();
