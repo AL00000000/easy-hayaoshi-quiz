@@ -501,7 +501,9 @@ function defaultSettings() {
 // 正答率の低い問題ほど高ランクの部屋で多く出す
 // ジャンルの絞り込み（"all" ならすべて）
 // 全体版（すべて）には株式の問題を出さない（証券コード・PERなどは一般向けにはマニアックすぎるため。本人の要望・2026-11-28）。株式の問題は株式版（/stock/）だけで出す
-const GENRE_FILTERS = { all: ["すべて", (q) => q.genre !== "株式"], pokemon: ["ポケモンだけ", (q) => q.genre === "ポケモン" || /ポケモン|ポケットモンスター/.test(q.text)], stock: ["株式だけ", (q) => q.genre === "株式"] };
+// ポケモン版向けの問題（data/08_pokemon*.txt）も全体版には出さない（全体版でポケモンが多すぎるため。本人の要望・2026-11-28）。全体版のポケモンは 02_manga などの一般向けの約40問だけ
+const isPokemonEditionQ = (q) => /^08_pokemon/.test(q.id);
+const GENRE_FILTERS = { all: ["すべて", (q) => q.genre !== "株式" && !isPokemonEditionQ(q)], pokemon: ["ポケモンだけ", (q) => q.genre === "ポケモン" || /ポケモン|ポケットモンスター/.test(q.text)], stock: ["株式だけ", (q) => q.genre === "株式"] };
 // 種族値の問題（ポケモン版の細かいジャンル「種族値」）は、ポケモンだけを出すときに設定で選ぶ（本人の要望・2026-11-28）。
 //   off＝出さない（既定。本人の指定）／mix＝まぜる（数が多いので、出題の約3割になるように重みを下げる）／only＝種族値だけ
 // 全体版の「すべて」と今日の10問には出さない（全員が同じ問題を解く今日の10問を、設定で変えないため）
@@ -588,7 +590,8 @@ function pickNewQuestions(count, genre, stats) {
   if (!pool.length) return pickQuestions(count, rankOf(profile.rating), genre, stats);
   return shuffle(pool).sort((a, b) => (a.added < b.added ? 1 : a.added > b.added ? -1 : 0)).slice(0, count);
 }
-document.addEventListener("keydown", (e) => { if (e.altKey && !e.ctrlKey && !e.shiftKey && e.code === "KeyN") { e.preventDefault(); cycleNewMode(); } });
+// 日本語入力がオンでも効くように、キーの位置（code）と文字（key：n・N・全角のｎ）のどちらでも判定する
+document.addEventListener("keydown", (e) => { if (e.altKey && !e.ctrlKey && !e.shiftKey && (e.code === "KeyN" || /^[nNｎＮ]$/.test(e.key))) { e.preventDefault(); cycleNewMode(); } }, true);
 document.addEventListener("keydown", (e) => { if (e.altKey && !e.ctrlKey && !e.shiftKey && e.code === "KeyW") { e.preventDefault(); toggleMovesMode(); } });
 let movesModeTaps = [];
 document.addEventListener("click", (e) => {
@@ -597,11 +600,12 @@ document.addEventListener("click", (e) => {
   movesModeTaps = movesModeTaps.filter((t) => now - t < 2500).concat(now);
   if (movesModeTaps.length >= 5) { movesModeTaps = []; toggleMovesMode(); }
 });
+// スマホ：速く続けてタップすると「ダブルタップで拡大」に吸われて click が来ないことがあるので、指を置いた瞬間（pointerdown）で数える
 let newModeTaps = [];
-document.addEventListener("click", (e) => {
+document.addEventListener("pointerdown", (e) => {
   if (!e.target.closest || !e.target.closest("#me-box")) return;
   const now = Date.now();
-  newModeTaps = newModeTaps.filter((t) => now - t < 2500).concat(now);
+  newModeTaps = newModeTaps.filter((t) => now - t < 3000).concat(now);
   if (newModeTaps.length >= 5) { newModeTaps = []; cycleNewMode(); }
 });
 
