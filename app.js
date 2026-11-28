@@ -269,7 +269,8 @@ function isRetry(q, text) {
   if (inputs.some((i) => manual.includes(i))) return true;
   const forms = [q.answer, q.reading, ...(q.accept || [])].map(loose).filter((f) => f.length >= 2);
   if (inputs.some((i) => !KNOWN_ANSWERS.has(i) && forms.some((f) => i.length > f.length && i.includes(f)))) return true;
-  const qt = [q.text, ...(q.variants || []).map((v) => v.text)].map(loose).join("／");
+  // 「A、B、CのうちXはどれ？」の選択肢を答えたときは、ただの不正解（もう一回にはしない）
+  const qt = [q.text, ...(q.variants || []).map((v) => v.text)].filter((t) => !(t.includes("のうち") && t.endsWith("どれ？"))).map(loose).join("／");
   return inputs.some((i) => i.length >= 2 && qt.includes(i));
 }
 const KANA_ROWS = ["あいうえお", "かきくけこ", "さしすせそ", "たちつてと", "なにぬねの", "はひふへほ", "まみむめも", "やゆよ", "らりるれろ", "わをん", "がぎぐげご", "ざじずぜぞ", "だぢづでど", "ばびぶべぼ", "ぱぴぷぺぽ"];

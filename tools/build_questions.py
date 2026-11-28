@@ -145,9 +145,11 @@ def main():
         sd[na] = q["id"]
         for vt in [v["text"] for v in q.get("variants", [])] or [q["text"]]:
             t = norm(vt)
+            # 「A、B、CのうちXはどれ？」のように、選択肢を並べる問題は答えが文中にあってよい
+            choice_style = "のうち" in vt and vt.endswith("どれ？")
             for a in {q["answer"], q["reading"], *q["accept"]}:
                 a = norm(a)
-                if len(a) >= 2 and a in t:
+                if len(a) >= 2 and a in t and not choice_style:
                     problems.append(f"{w} 答え「{a}」が問題文に入っている: {q['answer']}")
             if not vt.endswith("？"):
                 problems.append(f"{w} 問題文が「？」で終わっていない: {vt[:20]}")
